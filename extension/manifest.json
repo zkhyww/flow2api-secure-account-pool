@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "影策 Flow2API Worker",
+  "version": "1.0.0",
+  "description": "yingce-flow2api-worker-v1: paired account import and captcha worker.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "cookies",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://labs.google/*",
+    "https://accounts.google.com/*",
+    "https://www.google.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://labs.google/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://127.0.0.1/*",
+        "http://localhost/*"
+      ],
+      "js": [
+        "local-connect.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html"
+}

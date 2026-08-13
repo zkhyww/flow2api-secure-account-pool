@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>影策 Flow2API Worker</title>
+  <style>
+    body{font-family:system-ui,sans-serif;background:#f3f4f6;color:#111827;margin:0}.wrap{max-width:620px;margin:36px auto;padding:0 18px}.panel{background:#fff;border-radius:12px;padding:24px;box-shadow:0 8px 24px #0001}label{display:block;font-weight:600;margin:16px 0 6px}input{box-sizing:border-box;width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px}button{margin-top:16px;margin-right:8px;border:0;border-radius:8px;background:#111827;color:#fff;padding:10px 16px;cursor:pointer}.muted{color:#6b7280;font-size:13px}.status{min-height:20px;margin-top:14px;color:#065f46}
+  </style>
+</head>
+<body><div class="wrap"><div class="panel">
+  <h1>影策 Flow2API Worker</h1>
+  <p class="muted">能力版本：<code>yingce-flow2api-worker-v1</code></p>
+  <p>服务端绑定身份：<strong id="routeIdentity">尚未配对</strong></p>
+  <p class="muted">正常使用无需填写配对码，打开管理页后会自动安全配对。</p>
+  <button id="autoConnectBtn" type="button">打开管理页并自动连接</button>
+  <details>
+    <summary>高级故障处理：手工配对</summary>
+    <label for="serverUrl">WebSocket 服务地址</label>
+    <input id="serverUrl" type="text" placeholder="ws://127.0.0.1:8000/captcha_ws">
+    <label for="pairingHandle">短时一次性配对码</label>
+    <input id="pairingHandle" type="password" autocomplete="off">
+    <button id="pairBtn" type="button">手工配对</button>
+  </details>
+  <hr>
+  <label><input id="autoImportEnabled" type="checkbox" style="width:auto"> 启用定时导入当前 Profile</label>
+  <label for="autoImportIntervalMinutes">定时导入间隔（分钟）</label>
+  <input id="autoImportIntervalMinutes" type="number" min="5" value="30">
+  <label for="refreshIntervalMinutes">账号刷新间隔（分钟）</label>
+  <input id="refreshIntervalMinutes" type="number" min="5" value="120">
+  <button id="saveBtn" type="button">保存导入设置</button>
+  <button id="importBtn" type="button">立即导入当前账号</button>
+  <p id="lastAutoImportStatus" class="muted">最近导入：尚未运行</p>
+  <div id="status" class="status"></div>
+</div></div><script src="options.js"></script></body>
+</html>

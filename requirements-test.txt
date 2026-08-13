@@ -1,0 +1,3 @@
+# Test and clean-delivery validation dependencies only.
+pytest
+Pillow

@@ -1,0 +1,1201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flow2API 模型测试</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1117; color: #e1e1e6; min-height: 100vh; }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+h1 { text-align: center; margin-bottom: 8px; font-size: 24px; color: #7c8aff; }
+.subtitle { text-align: center; color: #666; margin-bottom: 24px; font-size: 14px; }
+
+.config-bar {
+  display: flex; gap: 12px; margin-bottom: 20px; align-items: center;
+  background: #1a1b26; padding: 12px 16px; border-radius: 10px; border: 1px solid #2a2b3a;
+}
+.config-bar label { font-size: 13px; color: #888; white-space: nowrap; }
+.config-bar input, .config-bar select { flex: 1; background: #0f1117; border: 1px solid #2a2b3a; color: #e1e1e6; padding: 8px 12px; border-radius: 6px; font-size: 14px; }
+.config-bar button { background: #2a2b5a; border: 1px solid #7c8aff; color: #c8ceff; padding: 8px 12px; border-radius: 6px; cursor: pointer; font: inherit; }
+.config-bar button:focus-visible, .config-bar select:focus-visible { outline: 2px solid #7c8aff; outline-offset: 2px; }
+.config-note { margin-bottom: 20px; font-size: 12px; color: #7f8498; }
+
+.main-layout { display: flex; gap: 20px; }
+.sidebar { width: 320px; flex-shrink: 0; }
+.content { flex: 1; min-width: 0; }
+
+.hidden { display: none !important; }
+.parameter-card {
+  background: #1a1b26; border: 1px solid #2a2b3a; border-radius: 10px; padding: 16px;
+  align-self: flex-start;
+}
+.mode-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+.mode-tab {
+  flex: 1; min-width: 90px; padding: 9px 12px; border: 1px solid #34364a;
+  border-radius: 8px; background: #11131b; color: #a7a9b8; cursor: pointer;
+  font: inherit; font-size: 14px; font-weight: 600;
+}
+.mode-tab[aria-selected="true"] { background: #2a2b5a; border-color: #7c8aff; color: #c8ceff; }
+.parameter-card select {
+  width: 100%; background: #0f1117; border: 1px solid #2a2b3a; color: #e1e1e6;
+  padding: 9px 10px; border-radius: 7px; font-size: 14px;
+}
+.parameter-card select:focus, .mode-tab:focus-visible { outline: 2px solid #7c8aff; outline-offset: 2px; }
+.parameter-card select:disabled { color: #8b8d9a; cursor: not-allowed; }
+.parameter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.parameter-grid .form-group { min-width: 0; }
+.model-usage {
+  margin-top: 4px; padding: 12px; border-radius: 8px; background: #11131b;
+  color: #a7a9b8; font-size: 12px; line-height: 1.55;
+}
+.availability-text { min-height: 18px; margin-top: 8px; font-size: 12px; }
+.availability-available { color: #4ade80; }
+.availability-unavailable { color: #f87171; }
+
+.gen-panel {
+  background: #1a1b26; border: 1px solid #2a2b3a; border-radius: 10px; padding: 20px;
+}
+.gen-panel h3 { font-size: 16px; margin-bottom: 4px; }
+.gen-panel .model-info { font-size: 12px; color: #666; margin-bottom: 16px; }
+
+.form-group { margin-bottom: 14px; }
+.form-group label { display: block; font-size: 13px; color: #888; margin-bottom: 6px; }
+.form-group textarea {
+  width: 100%; background: #0f1117; border: 1px solid #2a2b3a; color: #e1e1e6;
+  padding: 10px 12px; border-radius: 8px; font-size: 14px; resize: vertical; min-height: 80px;
+  font-family: inherit;
+}
+.form-group textarea:focus { outline: none; border-color: #7c8aff; }
+.form-group input {
+  width: 100%; background: #0f1117; border: 1px solid #2a2b3a; color: #e1e1e6;
+  padding: 10px 12px; border-radius: 8px; font-size: 14px;
+}
+.form-group input:focus { outline: none; border-color: #7c8aff; }
+
+.image-upload-area {
+  border: 2px dashed #2a2b3a; border-radius: 8px; padding: 20px; text-align: center;
+  cursor: pointer; transition: border-color 0.2s; position: relative;
+}
+.image-upload-area:hover { border-color: #7c8aff; }
+.image-upload-area.has-images { padding: 10px; }
+.image-upload-hint { color: #555; font-size: 13px; }
+.image-preview-list { display: flex; gap: 8px; flex-wrap: wrap; }
+.image-preview-item {
+  position: relative; width: 80px; height: 80px; border-radius: 6px; overflow: hidden;
+}
+.image-preview-item img { width: 100%; height: 100%; object-fit: cover; }
+.image-preview-item .remove-btn {
+  position: absolute; top: 2px; right: 2px; width: 20px; height: 20px;
+  background: rgba(0,0,0,0.7); color: #fff; border: none; border-radius: 50%;
+  cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center;
+}
+
+.btn-generate {
+  width: 100%; padding: 12px; background: #7c8aff; color: #fff; border: none;
+  border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-generate:hover { background: #6b79ee; }
+.btn-generate:disabled { background: #3a3b5a; cursor: not-allowed; }
+
+.output-panel {
+  background: #1a1b26; border: 1px solid #2a2b3a; border-radius: 10px; padding: 20px; margin-top: 16px;
+}
+.output-panel h3 { font-size: 15px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.status-idle { background: #555; }
+.status-running { background: #facc15; animation: pulse 1s infinite; }
+.status-done { background: #4ade80; }
+.status-error { background: #f87171; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+.output-log {
+  background: #0f1117; border-radius: 8px; padding: 12px; font-size: 13px;
+  line-height: 1.6; max-height: 200px; overflow-y: auto; white-space: pre-wrap;
+  word-break: break-all; color: #aaa;
+}
+.output-result { margin-top: 12px; }
+.output-result img { max-width: 100%; border-radius: 8px; margin-top: 8px; }
+.output-result video { max-width: 100%; border-radius: 8px; margin-top: 8px; }
+
+.output-log::-webkit-scrollbar { width: 4px; }
+.output-log::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+@media (max-width: 768px) {
+  .main-layout { flex-direction: column; }
+  .sidebar { width: 100%; }
+  .parameter-card { align-self: stretch; }
+  .parameter-grid { grid-template-columns: minmax(0, 1fr); }
+  .config-bar { flex-wrap: wrap; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🧪 Flow2API 模型测试</h1>
+  <p class="subtitle">选择模型，输入提示词，测试生成效果</p>
+  <div id="extensionConnectionStatus" class="config-note hidden" role="status"><span id="extensionConnectionLight" class="status-dot status-running"></span> <span id="extensionConnectionText">服务状态检查中</span></div>
+
+  <div class="config-bar">
+    <label for="diagnosticTokenId">诊断账号:</label>
+    <select id="diagnosticTokenId"><option value="">自动调度</option></select>
+    <span id="adminCapabilityStatus" class="config-note">正在验证管理会话...</span>
+  </div>
+  <details id="advancedAuthSettings" class="config-note">
+    <summary>高级设置：使用外部 API Key 测试</summary>
+    <div class="config-bar">
+      <label>API Key:</label>
+      <input type="password" id="apiKey" placeholder="仅用于本次页面，不会保存">
+      <label>地址:</label>
+      <input type="text" id="baseUrl" placeholder="http://localhost:8000" />
+    </div>
+  </details>
+
+  <details id="unverifiedDiagnosticSettings" class="config-note hidden">
+    <summary>未验证能力诊断（仅当前管理会话）</summary>
+    <div class="config-bar">
+      <label for="unverifiedDiagnosticSelect">诊断组合</label>
+      <select id="unverifiedDiagnosticSelect"></select>
+      <button id="btnUseUnverifiedDiagnostic" type="button">使用此组合</button>
+      <span id="unverifiedDiagnosticStatus" role="status"></span>
+    </div>
+  </details>
+
+  <div class="main-layout">
+    <aside class="sidebar parameter-card" aria-label="生成参数">
+      <div class="mode-tabs" role="tablist" aria-label="生成类型">
+        <button class="mode-tab" type="button" role="tab" data-media-mode="image" aria-selected="true">图片</button>
+        <button class="mode-tab" type="button" role="tab" data-media-mode="video" aria-selected="false">视频</button>
+      </div>
+
+      <div class="form-group">
+        <label for="capabilitySelect">模型</label>
+        <select id="capabilitySelect" aria-describedby="modelUsage"></select>
+      </div>
+
+      <div id="imageParameterGroup" class="parameter-grid">
+        <div class="form-group">
+          <label for="imageAspectRatio">比例</label>
+          <select id="imageAspectRatio"></select>
+        </div>
+        <div class="form-group">
+          <label for="imageResolution">清晰度</label>
+          <select id="imageResolution"></select>
+        </div>
+      </div>
+
+      <div id="videoParameterGroup" class="parameter-grid hidden">
+        <div class="form-group">
+          <label for="videoAspectRatio">比例</label>
+          <select id="videoAspectRatio"></select>
+        </div>
+        <div class="form-group">
+          <label for="videoDuration">时长</label>
+          <select id="videoDuration"></select>
+        </div>
+      </div>
+
+      <div id="modelUsage" class="model-usage" role="status">正在加载当前能力…</div>
+      <div id="modelAvailability" class="availability-text" aria-live="polite"></div>
+      <p class="config-note" style="margin:10px 0 0;">4K 组合需要高级会员；1K/2K 按目录中的已验证组合开放。</p>
+    </aside>
+
+    <div class="content">
+      <div class="gen-panel">
+        <h3 id="selectedModelName">请选择模型</h3>
+        <div class="model-info" id="selectedModelInfo">比例、清晰度与时长是参数，提交时由页面解析为兼容模型 ID。</div>
+        <div class="model-info" id="videoDurationNote" style="display:none;">Omni Flash 可选 8 秒或 10 秒；Veo 3.1 保持 8 秒。</div>
+
+        <div class="form-group">
+          <label for="promptInput">提示词 (Prompt)</label>
+          <textarea id="promptInput" placeholder="描述你想生成的内容...">一只可爱的橘猫趴在窗台上晒太阳，窗外是樱花盛开的春天</textarea>
+        </div>
+
+        <div class="form-group" id="imageUploadGroup" style="display:none;">
+          <label>上传图片 <span id="imageLimit" style="color:#666;font-size:12px;"></span></label>
+          <div class="image-upload-area" id="imageUploadArea">
+            <div class="image-upload-hint" id="imageHint">点击或拖拽上传图片</div>
+            <div class="image-preview-list" id="imagePreviewList"></div>
+          </div>
+          <input type="file" id="imageFileInput" accept="image/*" multiple style="display:none;">
+        </div>
+
+        <div class="form-group" id="videoSourceGroup" style="display:none;">
+          <div class="config-note" id="videoSourceStatus">请先成功生成一个视频，再使用结果旁的一键续写按钮。</div>
+        </div>
+
+        <button class="btn-generate" id="btnGenerate" disabled>选择模型后开始生成</button>
+      </div>
+
+      <div class="output-panel">
+        <h3><span class="status-dot status-idle" id="statusDot"></span> <span id="statusText">等待中</span></h3>
+        <div class="output-log" id="outputLog">准备就绪，选择模型并点击生成按钮开始...</div>
+        <div class="output-result" id="outputResult"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/test-page-capabilities.js"></script>
+<script>
+const {
+  listVisibleCapabilities,
+  listVisibleOptions,
+  selectPreferredOptionValue,
+  listHiddenDiagnosticMappings,
+  resolveCapabilityModelId,
+  resolveExtendModelId
+} = window.Flow2ApiCapabilityUi;
+
+const STATE = {
+  mediaMode: "image",
+  selectedCapabilityId: "",
+  selectedModel: "",
+  parameters: {
+    aspect_ratio: "16:9",
+    resolution: "1K",
+    duration_seconds: ""
+  },
+  modelConfig: null,
+  images: [],
+  generating: false,
+  unverifiedDiagnosticActive: false,
+  extendSourceMediaId: "",
+  lastSuccessfulVideo: null
+};
+</script>
+<script>
+let MODEL_CATALOG = [];
+let ALL_CAPABILITIES = {};
+let MODEL_AVAILABILITY = {};
+let UNVERIFIED_DIAGNOSTICS = [];
+let testCapability = "";
+let extensionConnectionTimer = null;
+
+function updateExtensionConnectionStatus(state) {
+  const status = document.getElementById("extensionConnectionStatus");
+  const light = document.getElementById("extensionConnectionLight");
+  const text = document.getElementById("extensionConnectionText");
+  if (!status || !light || !text) return;
+  const mode = String(state && state.captcha_mode || "");
+  if (state && state.captcha_mode === "personal") {
+    status.classList.remove("hidden");
+    const ready = state.status === "ready";
+    light.className = `status-dot ${ready ? "status-done" : "status-running"}`;
+    text.textContent = ready
+      ? `内置浏览器按需就绪 · ${state.ready_account_count || 0} 个账号可用`
+      : "请先登录并保存 Google 账号";
+    return;
+  }
+  if (mode !== "extension") {
+    status.classList.add("hidden");
+    return;
+  }
+  status.classList.remove("hidden");
+  const ready = state && state.status === "ready";
+  const binding = state && state.status === "account_binding_required";
+  const connecting = state && state.status === "connecting";
+  light.className = `status-dot ${ready ? "status-done" : binding || connecting ? "status-running" : "status-error"}`;
+  text.textContent = ready ? "插件及账号已连接" : binding ? "插件已连接，当前账号未绑定" : connecting ? "插件连接中" : "插件未连接或需要重新配对";
+}
+
+async function pollExtensionConnectionStatus() {
+  try {
+    const response = await fetch("/api/admin/extension-connection-status", { credentials: "include" });
+    if (!response.ok) throw new Error("status_failed");
+    updateExtensionConnectionStatus(await response.json());
+  } catch (_error) {
+    updateExtensionConnectionStatus({ status: "disconnected" });
+  }
+}
+
+function stopExtensionConnectionPolling() {
+  if (extensionConnectionTimer) clearInterval(extensionConnectionTimer);
+  extensionConnectionTimer = null;
+}
+
+function startExtensionConnectionPolling() {
+  stopExtensionConnectionPolling();
+  pollExtensionConnectionStatus();
+  extensionConnectionTimer = setInterval(pollExtensionConnectionStatus, 3000);
+}
+
+async function issueTestCapability() {
+  const response = await fetch("/api/admin/test-capability", {
+    method: "POST",
+    credentials: "include"
+  });
+  if (!response.ok) {
+    testCapability = "";
+    document.getElementById("adminCapabilityStatus").textContent = "管理会话已失效，请重新登录";
+    return false;
+  }
+  const payload = await response.json();
+  testCapability = String(payload.capability || "");
+  document.getElementById("adminCapabilityStatus").textContent = "已使用当前管理会话，无需填写 API Key";
+  return !!testCapability;
+}
+
+async function fetchWithTestCapabilityRetry(url, options = {}, retried = false) {
+  const headers = {
+    ...(options.headers || {}),
+    "X-Flow2API-Test-Capability": testCapability
+  };
+  const response = await fetch(url, {
+    ...options,
+    headers,
+    credentials: "include"
+  });
+  if (response.status !== 401 || retried) return response;
+  testCapability = "";
+  if (!await issueTestCapability()) return response;
+  return fetchWithTestCapabilityRetry(url, options, true);
+}
+
+async function loadDiagnosticAccounts() {
+  const response = await fetch("/api/admin/test-accounts", { credentials: "include" });
+  if (!response.ok) return;
+  const payload = await response.json();
+  const select = document.getElementById("diagnosticTokenId");
+  select.innerHTML = '<option value="">自动调度</option>';
+  (payload.items || []).forEach(account => {
+    const option = document.createElement("option");
+    option.value = String(account.id);
+    option.textContent = `${account.display_name || `account-${account.id}`} (${account.auth_status || "unknown"})`;
+    select.appendChild(option);
+  });
+}
+
+async function loadModelAvailability() {
+  const apiKey = (document.getElementById("apiKey").value || "").trim();
+  const diagnosticTokenId = document.getElementById("diagnosticTokenId").value;
+  MODEL_AVAILABILITY = {};
+
+  if (apiKey || !diagnosticTokenId) {
+    renderCapabilityControls();
+    return;
+  }
+  if (!testCapability && !await issueTestCapability()) {
+    renderCapabilityControls();
+    return;
+  }
+
+  try {
+    const response = await fetchWithTestCapabilityRetry(
+      `/api/test/model-availability?diagnostic_token_id=${encodeURIComponent(diagnosticTokenId)}`,
+      { method: "GET" }
+    );
+    if (!response.ok) throw new Error("availability_failed");
+    const payload = await response.json();
+    (payload.items || []).forEach(item => {
+      const modelId = String(item.model || "").trim();
+      if (!modelId) return;
+      MODEL_AVAILABILITY[modelId] = {
+        status: normalizeAvailabilityStatus(item),
+        error_class: String(item.error_class || ""),
+      };
+    });
+  } catch (_error) {
+    console.warn("加载账号模型可用性失败");
+    MODEL_AVAILABILITY = {};
+  }
+  renderCapabilityControls();
+}
+
+function showModelCatalogError(_reason) {
+  console.warn("模型目录加载失败");
+  MODEL_CATALOG = [];
+  ALL_CAPABILITIES = {};
+  renderCapabilityControls();
+  renderUnverifiedDiagnosticControls();
+}
+
+async function loadModels() {
+  const baseUrl = (document.getElementById("baseUrl").value || "").trim();
+  const apiKey = (document.getElementById("apiKey").value || "").trim();
+  try {
+    if (!apiKey && !testCapability && !await issueTestCapability()) {
+      showModelCatalogError("admin_session_required");
+      return;
+    }
+    const url = apiKey ? `${baseUrl}/v1/models` : "/api/test/models";
+    const resp = apiKey
+      ? await fetch(url, {
+          headers: { "Authorization": `Bearer ${apiKey}` },
+          credentials: "include"
+        })
+      : await fetchWithTestCapabilityRetry(url, { method: "GET" });
+    if (!resp.ok) throw new Error("catalog_failed");
+
+    const data = await resp.json();
+    MODEL_CATALOG = (Array.isArray(data.data) ? data.data : [])
+      .filter(entry => String(entry && entry.capability_id || "").trim());
+    if (!MODEL_CATALOG.length) {
+      showModelCatalogError("empty_model_catalog");
+      return;
+    }
+    ALL_CAPABILITIES = Object.fromEntries(
+      MODEL_CATALOG.map(entry => [String(entry.capability_id), entry])
+    );
+    renderCapabilityControls();
+    renderUnverifiedDiagnosticControls();
+  } catch (_error) {
+    showModelCatalogError("load_failed");
+  }
+}
+
+function normalizeAvailabilityStatus(value) {
+  const raw = typeof value === "string" ? value : value && value.status;
+  return raw === "available" || raw === "unavailable" ? raw : "unknown";
+}
+
+function getSelectedCapability() {
+  return ALL_CAPABILITIES[STATE.selectedCapabilityId] || null;
+}
+
+function getModelMeta(capability, requiresVideoId = false) {
+  if (!capability) return null;
+  const type = capability.model_type === "image" ? "image" : "video";
+  return {
+    type,
+    supportsImages: !requiresVideoId && Boolean(capability.supports_images),
+    minImages: requiresVideoId ? 0 : Number(capability.min_images || 0),
+    maxImages: requiresVideoId
+      ? 0
+      : Number(capability.max_images || (type === "image" ? 5 : 0)),
+    requires_video_id: requiresVideoId,
+  };
+}
+
+function renderUnverifiedDiagnosticControls() {
+  const details = document.getElementById("unverifiedDiagnosticSettings");
+  const select = document.getElementById("unverifiedDiagnosticSelect");
+  const apiKey = (document.getElementById("apiKey").value || "").trim();
+  const adminTestChain = !apiKey && testCapability;
+  UNVERIFIED_DIAGNOSTICS = adminTestChain
+    ? listHiddenDiagnosticMappings(MODEL_CATALOG)
+    : [];
+
+  const available = Boolean(adminTestChain && UNVERIFIED_DIAGNOSTICS.length);
+  details.classList.toggle("hidden", !available);
+  if (!available) {
+    details.open = false;
+    select.innerHTML = "";
+    return;
+  }
+
+  select.innerHTML = "";
+  UNVERIFIED_DIAGNOSTICS.forEach((diagnostic, index) => {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = diagnostic.label;
+    select.appendChild(option);
+  });
+}
+
+function activateUnverifiedDiagnostic() {
+  const apiKey = (document.getElementById("apiKey").value || "").trim();
+  const select = document.getElementById("unverifiedDiagnosticSelect");
+  const diagnostic = UNVERIFIED_DIAGNOSTICS[Number(select.value)];
+  if (apiKey || !testCapability || !diagnostic) return false;
+
+  const capability = ALL_CAPABILITIES[diagnostic.capabilityId];
+  if (!capability) return false;
+
+  STATE.mediaMode = diagnostic.modelType;
+  STATE.selectedCapabilityId = diagnostic.capabilityId;
+  STATE.parameters = { ...STATE.parameters, ...diagnostic.parameters };
+  STATE.selectedModel = diagnostic.modelId;
+  STATE.modelConfig = getModelMeta(capability);
+  STATE.images = [];
+  STATE.extendSourceMediaId = "";
+  STATE.unverifiedDiagnosticActive = true;
+
+  document.getElementById("selectedModelName").textContent =
+    `${capability.display_name || "当前能力"}（未验证诊断）`;
+  document.getElementById("selectedModelInfo").textContent =
+    diagnostic.label.replace(`${capability.display_name} · `, "");
+  document.getElementById("modelUsage").textContent =
+    "仅用于当前管理会话的真实验证；不会加入正式菜单。";
+  document.getElementById("modelAvailability").textContent = "";
+  document.getElementById("imageUploadGroup").style.display = "none";
+  document.getElementById("imagePreviewList").innerHTML = "";
+  document.getElementById("imageHint").style.display = "block";
+  document.getElementById("videoSourceGroup").style.display = "none";
+  document.getElementById("unverifiedDiagnosticStatus").textContent =
+    `已选择：${diagnostic.label}`;
+  refreshGenerateButton();
+  return true;
+}
+
+function getAvailabilityMeta(modelId) {
+  const status = normalizeAvailabilityStatus(MODEL_AVAILABILITY[modelId]);
+  if (status === "available") {
+    return { status, label: "当前诊断账号可用", className: "availability-available" };
+  }
+  if (status === "unavailable") {
+    return { status, label: "当前诊断账号不可用", className: "availability-unavailable" };
+  }
+  return { status: "unknown", label: "", className: "" };
+}
+
+function setSelectOptions(select, options, preferredValue) {
+  select.innerHTML = "";
+  (options || []).forEach(item => {
+    const option = document.createElement("option");
+    option.value = String(item.value);
+    option.textContent = String(item.label || item.value);
+    select.appendChild(option);
+  });
+  const values = Array.from(select.options).map(option => option.value);
+  select.value = values.includes(String(preferredValue || ""))
+    ? String(preferredValue)
+    : String(values[0] || "");
+}
+
+function getSelectedMapping(capability) {
+  return (capability && capability.compatibility_map || []).find(
+    mapping => String(mapping.model_id || "") === String(STATE.selectedModel || "")
+  ) || null;
+}
+
+function renderCapabilityControls() {
+  const capabilities = listVisibleCapabilities(MODEL_CATALOG, STATE.mediaMode);
+  const select = document.getElementById("capabilitySelect");
+  if (!capabilities.length) {
+    STATE.selectedCapabilityId = "";
+    STATE.selectedModel = "";
+    STATE.modelConfig = null;
+    select.innerHTML = '<option value="">未获取到当前能力</option>';
+    document.getElementById("modelUsage").textContent = "请检查当前会话或稍后重试。";
+    refreshGenerateButton();
+    return;
+  }
+
+  if (!capabilities.some(entry => entry.capability_id === STATE.selectedCapabilityId)) {
+    STATE.selectedCapabilityId = String(capabilities[0].capability_id);
+  }
+  setSelectOptions(
+    select,
+    capabilities.map(entry => ({
+      value: entry.capability_id,
+      label: entry.display_name,
+    })),
+    STATE.selectedCapabilityId
+  );
+  applyCapabilitySelection();
+}
+
+function selectMediaMode(mediaMode) {
+  if (mediaMode !== "image" && mediaMode !== "video") return;
+  STATE.mediaMode = mediaMode;
+  STATE.selectedCapabilityId = "";
+  STATE.extendSourceMediaId = "";
+  document.querySelectorAll("[data-media-mode]").forEach(button => {
+    button.setAttribute("aria-selected", String(button.dataset.mediaMode === mediaMode));
+  });
+  document.getElementById("imageParameterGroup").classList.toggle("hidden", mediaMode !== "image");
+  document.getElementById("videoParameterGroup").classList.toggle("hidden", mediaMode !== "video");
+  document.getElementById("videoDurationNote").style.display = mediaMode === "video" ? "block" : "none";
+  renderCapabilityControls();
+}
+
+function applyCapabilitySelection() {
+  const select = document.getElementById("capabilitySelect");
+  STATE.selectedCapabilityId = String(select.value || "");
+  const capability = getSelectedCapability();
+  if (!capability) {
+    STATE.selectedModel = "";
+    STATE.modelConfig = null;
+    refreshGenerateButton();
+    return;
+  }
+
+  const defaults = capability.default_parameters || {};
+  if (STATE.mediaMode === "image") {
+    const aspectSelect = document.getElementById("imageAspectRatio");
+    const resolutionSelect = document.getElementById("imageResolution");
+    const resolution = String(STATE.parameters.resolution || defaults.resolution || "1K");
+    setSelectOptions(
+      aspectSelect,
+      listVisibleOptions(capability, "aspect_ratio", { resolution }),
+      STATE.parameters.aspect_ratio || defaults.aspect_ratio
+    );
+    const aspectRatio = aspectSelect.value;
+    setSelectOptions(
+      resolutionSelect,
+      listVisibleOptions(capability, "resolution", { aspect_ratio: aspectRatio }),
+      resolution
+    );
+    STATE.parameters.aspect_ratio = aspectRatio;
+    STATE.parameters.resolution = resolutionSelect.value;
+  } else {
+    const aspectSelect = document.getElementById("videoAspectRatio");
+    const durationSelect = document.getElementById("videoDuration");
+    const durationOptions = listVisibleOptions(
+      capability,
+      "duration_seconds",
+      {}
+    );
+    const preferredDuration = selectPreferredOptionValue(
+      durationOptions,
+      STATE.parameters.duration_seconds,
+      defaults.duration_seconds
+    );
+    setSelectOptions(durationSelect, durationOptions, preferredDuration);
+    const duration = durationSelect.value;
+    const aspectOptions = listVisibleOptions(
+      capability,
+      "aspect_ratio",
+      { duration_seconds: duration }
+    );
+    const preferredAspect = selectPreferredOptionValue(
+      aspectOptions,
+      STATE.parameters.aspect_ratio,
+      defaults.aspect_ratio
+    );
+    setSelectOptions(aspectSelect, aspectOptions, preferredAspect);
+    STATE.parameters.aspect_ratio = aspectSelect.value;
+    STATE.parameters.duration_seconds = duration;
+  }
+  updateResolvedModel();
+}
+
+function handleImageAspectChange() {
+  const capability = getSelectedCapability();
+  const aspectSelect = document.getElementById("imageAspectRatio");
+  const resolutionSelect = document.getElementById("imageResolution");
+  STATE.parameters.aspect_ratio = aspectSelect.value;
+  setSelectOptions(
+    resolutionSelect,
+    listVisibleOptions(
+      capability,
+      "resolution",
+      { aspect_ratio: STATE.parameters.aspect_ratio }
+    ),
+    STATE.parameters.resolution
+  );
+  STATE.parameters.resolution = resolutionSelect.value;
+  updateResolvedModel();
+}
+
+function handleImageResolutionChange() {
+  const capability = getSelectedCapability();
+  const aspectSelect = document.getElementById("imageAspectRatio");
+  const resolutionSelect = document.getElementById("imageResolution");
+  STATE.parameters.resolution = resolutionSelect.value;
+  setSelectOptions(
+    aspectSelect,
+    listVisibleOptions(
+      capability,
+      "aspect_ratio",
+      { resolution: STATE.parameters.resolution }
+    ),
+    STATE.parameters.aspect_ratio
+  );
+  STATE.parameters.aspect_ratio = aspectSelect.value;
+  updateResolvedModel();
+}
+
+function handleVideoAspectChange() {
+  const capability = getSelectedCapability();
+  if (!capability) return;
+  const aspectSelect = document.getElementById("videoAspectRatio");
+  const durationSelect = document.getElementById("videoDuration");
+  STATE.parameters.aspect_ratio = aspectSelect.value;
+  const durationOptions = listVisibleOptions(
+    capability,
+    "duration_seconds",
+    { aspect_ratio: STATE.parameters.aspect_ratio }
+  );
+  const preferredDuration = selectPreferredOptionValue(
+    durationOptions,
+    STATE.parameters.duration_seconds,
+    capability.default_parameters && capability.default_parameters.duration_seconds
+  );
+  setSelectOptions(durationSelect, durationOptions, preferredDuration);
+  STATE.parameters.duration_seconds = durationSelect.value;
+  updateResolvedModel();
+}
+
+function handleVideoDurationChange() {
+  const capability = getSelectedCapability();
+  if (!capability) return;
+  const aspectSelect = document.getElementById("videoAspectRatio");
+  const durationSelect = document.getElementById("videoDuration");
+  STATE.parameters.duration_seconds = durationSelect.value;
+  const aspectOptions = listVisibleOptions(
+    capability,
+    "aspect_ratio",
+    { duration_seconds: STATE.parameters.duration_seconds }
+  );
+  const preferredAspect = selectPreferredOptionValue(
+    aspectOptions,
+    STATE.parameters.aspect_ratio,
+    capability.default_parameters && capability.default_parameters.aspect_ratio
+  );
+  setSelectOptions(aspectSelect, aspectOptions, preferredAspect);
+  STATE.parameters.aspect_ratio = aspectSelect.value;
+  updateResolvedModel();
+}
+
+function updateResolvedModel() {
+  const capability = getSelectedCapability();
+  if (!capability) {
+    STATE.selectedModel = "";
+    STATE.modelConfig = null;
+    refreshGenerateButton();
+    return;
+  }
+
+  const parameters = STATE.mediaMode === "image"
+    ? {
+        aspect_ratio: document.getElementById("imageAspectRatio").value,
+        resolution: document.getElementById("imageResolution").value,
+      }
+    : {
+        aspect_ratio: document.getElementById("videoAspectRatio").value,
+        duration_seconds: document.getElementById("videoDuration").value,
+      };
+  STATE.parameters = { ...STATE.parameters, ...parameters };
+  STATE.selectedModel = resolveCapabilityModelId(capability, parameters);
+  STATE.modelConfig = STATE.selectedModel ? getModelMeta(capability) : null;
+  STATE.extendSourceMediaId = "";
+  STATE.unverifiedDiagnosticActive = false;
+
+  const mapping = getSelectedMapping(capability);
+  const tierNote = mapping && mapping.validation_status === "membership_required"
+    ? " 此组合需要高级会员。"
+    : "";
+  document.getElementById("selectedModelName").textContent = String(capability.display_name || "请选择模型");
+  document.getElementById("selectedModelInfo").textContent = STATE.selectedModel
+    ? `${STATE.mediaMode === "image" ? "图片" : "视频"} · ${parameters.aspect_ratio}${STATE.mediaMode === "image" ? ` · ${parameters.resolution}` : ` · ${parameters.duration_seconds} 秒`}`
+    : "当前参数组合未开放。";
+  document.getElementById("modelUsage").textContent =
+    `${String(capability.description || "")}${tierNote}`;
+
+  const availability = getAvailabilityMeta(STATE.selectedModel);
+  const availabilityNode = document.getElementById("modelAvailability");
+  availabilityNode.className = `availability-text ${availability.className}`;
+  availabilityNode.textContent = availability.label;
+
+  const uploadGroup = document.getElementById("imageUploadGroup");
+  const meta = STATE.modelConfig;
+  if (meta && meta.supportsImages) {
+    uploadGroup.style.display = "block";
+    const limitText = meta.type === "image"
+      ? "可选，用于参考图编辑"
+      : `${meta.minImages}-${meta.maxImages} 张参考图`;
+    document.getElementById("imageLimit").textContent = `(${limitText})`;
+  } else {
+    uploadGroup.style.display = "none";
+  }
+
+  STATE.images = [];
+  document.getElementById("imagePreviewList").innerHTML = "";
+  document.getElementById("imageHint").style.display = "block";
+  document.getElementById("videoSourceGroup").style.display = "none";
+  refreshGenerateButton();
+}
+
+function canGenerateSelectedModel(modelMeta, mediaGenerationId) {
+  if (!modelMeta) return false;
+  return !modelMeta.requires_video_id || Boolean(String(mediaGenerationId || "").trim());
+}
+
+function useLastVideoForExtend() {
+  const source = STATE.lastSuccessfulVideo;
+  if (!source || !String(source.mediaGenerationId || "").trim()) return false;
+  const capability = ALL_CAPABILITIES[String(source.capabilityId || "")];
+  const extendModel = resolveExtendModelId(capability, source.aspectRatio);
+  if (!extendModel) return false;
+
+  STATE.mediaMode = "video";
+  STATE.selectedCapabilityId = String(source.capabilityId);
+  STATE.parameters.aspect_ratio = String(source.aspectRatio || "16:9");
+  STATE.parameters.duration_seconds = "8";
+  STATE.selectedModel = extendModel;
+  STATE.modelConfig = getModelMeta(capability, true);
+  STATE.extendSourceMediaId = String(source.mediaGenerationId).trim();
+  STATE.unverifiedDiagnosticActive = false;
+
+  const sourceGroup = document.getElementById("videoSourceGroup");
+  if (sourceGroup) sourceGroup.style.display = "block";
+  const status = document.getElementById("videoSourceStatus");
+  if (status) status.textContent = "已安全选择上一次成功视频作为续写源。";
+  refreshGenerateButton();
+  return true;
+}
+
+function refreshGenerateButton() {
+  const btn = document.getElementById("btnGenerate");
+  const meta = STATE.modelConfig;
+  const eligible = canGenerateSelectedModel(meta, STATE.extendSourceMediaId);
+  btn.disabled = STATE.generating || !eligible;
+  if (STATE.generating) {
+    btn.textContent = "⏳ 生成中...";
+  } else if (meta && meta.requires_video_id && !eligible) {
+    btn.textContent = "需要先选择一个已生成视频";
+  } else if (meta) {
+    btn.textContent = meta.type === "image" ? "🎨 生成图片" : "🎬 生成视频";
+  } else {
+    btn.textContent = "选择模型后开始生成";
+  }
+}
+
+// Image upload handling
+const uploadArea = document.getElementById("imageUploadArea");
+const fileInput = document.getElementById("imageFileInput");
+
+uploadArea.onclick = (e) => {
+  if (e.target.closest(".remove-btn")) return;
+  fileInput.click();
+};
+
+uploadArea.ondragover = (e) => { e.preventDefault(); uploadArea.style.borderColor = "#7c8aff"; };
+uploadArea.ondragleave = () => { uploadArea.style.borderColor = "#2a2b3a"; };
+uploadArea.ondrop = (e) => {
+  e.preventDefault();
+  uploadArea.style.borderColor = "#2a2b3a";
+  handleFiles(e.dataTransfer.files);
+};
+
+fileInput.onchange = () => { handleFiles(fileInput.files); fileInput.value = ""; };
+
+function handleFiles(files) {
+  const maxImages = STATE.modelConfig ? STATE.modelConfig.maxImages : 5;
+  for (const file of files) {
+    if (STATE.images.length >= maxImages) break;
+    if (!file.type.startsWith("image/")) continue;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      STATE.images.push(e.target.result);
+      renderImagePreviews();
+    };
+    reader.readAsDataURL(file);
+  }
+}
+
+function renderImagePreviews() {
+  const list = document.getElementById("imagePreviewList");
+  const hint = document.getElementById("imageHint");
+  list.innerHTML = "";
+  hint.style.display = STATE.images.length ? "none" : "block";
+
+  STATE.images.forEach((dataUrl, idx) => {
+    const item = document.createElement("div");
+    item.className = "image-preview-item";
+    item.innerHTML = `<img src="${dataUrl}" alt="preview"><button class="remove-btn" onclick="removeImage(${idx})">×</button>`;
+    list.appendChild(item);
+  });
+}
+
+function removeImage(idx) {
+  STATE.images.splice(idx, 1);
+  renderImagePreviews();
+}
+
+// Generation
+document.getElementById("btnGenerate").onclick = generate;
+
+async function generate() {
+  if (!STATE.selectedModel || STATE.generating) return;
+
+  const mediaGenerationId = String(STATE.extendSourceMediaId || "").trim();
+  if (!canGenerateSelectedModel(STATE.modelConfig, mediaGenerationId)) {
+    alert("请先成功生成一个视频，再使用结果旁的一键续写按钮");
+    refreshGenerateButton();
+    return;
+  }
+
+  const baseUrl = (document.getElementById("baseUrl").value || "").trim();
+  const apiKey = (document.getElementById("apiKey").value || "").trim();
+  const prompt = document.getElementById("promptInput").value.trim();
+  if (STATE.unverifiedDiagnosticActive && (apiKey || !testCapability)) {
+    alert("未验证能力诊断仅限当前管理会话");
+    renderUnverifiedDiagnosticControls();
+    return;
+  }
+  if (!prompt) { alert("请输入提示词"); return; }
+  if (!apiKey && !testCapability && !await issueTestCapability()) { alert("管理会话已失效，请重新登录"); return; }
+  if (apiKey && !baseUrl) { alert("请输入服务地址"); return; }
+
+  STATE.generating = true;
+  const btn = document.getElementById("btnGenerate");
+  btn.disabled = true;
+  btn.textContent = "⏳ 生成中...";
+
+  const dot = document.getElementById("statusDot");
+  dot.className = "status-dot status-running";
+  document.getElementById("statusText").textContent = "生成中...";
+  document.getElementById("outputLog").textContent = "";
+  document.getElementById("outputResult").innerHTML = "";
+
+  const log = document.getElementById("outputLog");
+  const appendLog = (text) => { log.textContent += text; log.scrollTop = log.scrollHeight; };
+
+  // Build messages
+  const content = [];
+  content.push({ type: "text", text: prompt });
+  STATE.images.forEach(dataUrl => {
+    content.push({ type: "image_url", image_url: { url: dataUrl } });
+  });
+  if (STATE.modelConfig.requires_video_id) {
+    content.push({
+      type: "image_url",
+      image_url: { url: `extend://${mediaGenerationId}` }
+    });
+  }
+
+  const messages = [{ role: "user", content: content.length === 1 ? prompt : content }];
+
+  const diagnosticTokenId = document.getElementById("diagnosticTokenId").value;
+  const body = { model: STATE.selectedModel, messages, stream: true };
+  if (!apiKey && diagnosticTokenId) body.diagnostic_token_id = Number(diagnosticTokenId);
+
+  const publicErrorClasses = new Set([
+    "recaptcha", "model_access_denied", "membership_tier", "quota_exhausted",
+    "content_policy", "authentication", "rate_limited", "upstream_5xx", "upstream_error"
+  ]);
+  const normalizePublicErrorClass = (value) => {
+    const candidate = String(value || "").trim();
+    return publicErrorClasses.has(candidate) ? candidate : "upstream_error";
+  };
+  const startTime = Date.now();
+  const selectedCapability = getSelectedCapability();
+  const publicCapabilityLabel = String(
+    selectedCapability && selectedCapability.display_name || "当前能力"
+  );
+  appendLog(`[${new Date().toLocaleTimeString()}] 能力: ${publicCapabilityLabel}\n`);
+  appendLog(`[${new Date().toLocaleTimeString()}] 开始请求...\n`);
+
+  try {
+    const requestUrl = apiKey ? `${baseUrl}/v1/chat/completions` : "/api/test/chat/completions";
+    const requestOptions = {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    };
+    const resp = apiKey
+      ? await fetch(requestUrl, {
+          ...requestOptions,
+          headers: {
+            ...requestOptions.headers,
+            "Authorization": `Bearer ${apiKey}`
+          }
+        })
+      : await fetchWithTestCapabilityRetry(requestUrl, requestOptions);
+
+    if (!resp.ok) {
+      const requestError = new Error("request_failed");
+      requestError.publicErrorClass = resp.status === 401 || resp.status === 403
+        ? "authentication"
+        : resp.status === 429
+          ? "rate_limited"
+          : resp.status >= 500
+            ? "upstream_5xx"
+            : "upstream_error";
+      throw requestError;
+    }
+    if (!resp.body) {
+      const streamError = new Error("stream_unavailable");
+      streamError.publicErrorClass = "upstream_error";
+      throw streamError;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let sseBuffer = "";
+    let fullContent = "";
+    let sawDone = false;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      sseBuffer += decoder.decode(value, { stream: true });
+      sseBuffer = sseBuffer.replace(/\r\n/g, "\n");
+      let boundary;
+      while ((boundary = sseBuffer.indexOf("\n\n")) >= 0) {
+        const eventBlock = sseBuffer.slice(0, boundary);
+        sseBuffer = sseBuffer.slice(boundary + 2);
+        const eventData = eventBlock
+          .split("\n")
+          .filter(line => line.startsWith("data:"))
+          .map(line => line.slice(5).trimStart())
+          .join("\n");
+        if (!eventData) continue;
+        if (eventData === "[DONE]") {
+          sawDone = true;
+          break;
+        }
+
+        let parsed;
+        try {
+          parsed = JSON.parse(eventData);
+        } catch (_parseError) {
+          continue;
+        }
+        if (parsed.error) {
+          const generationError = new Error("generation_failed");
+          generationError.publicErrorClass = normalizePublicErrorClass(
+            parsed.error.code || parsed.error.message
+          );
+          throw generationError;
+        }
+
+        const choice = (parsed.choices || [])[0] || {};
+        const delta = choice.delta || {};
+        const progressText = String(delta.reasoning_content || "");
+        if (progressText && !progressText.trimStart().startsWith("错误:")) {
+          appendLog(progressText.replace(/https?:\/\/\S+/g, "[media-url-hidden]"));
+        }
+        const streamedContent = String(delta.content || "");
+        const messageContent = String((choice.message || {}).content || parsed.content || "");
+        if (streamedContent) fullContent += streamedContent;
+        if (messageContent) fullContent += messageContent;
+      }
+      if (sawDone) break;
+    }
+    if (!sawDone) {
+      const disconnected = new Error("stream_disconnected");
+      disconnected.publicErrorClass = "upstream_error";
+      throw disconnected;
+    }
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    appendLog(`\n\n[${new Date().toLocaleTimeString()}] 完成，耗时 ${elapsed}s\n`);
+
+    // Render result
+    renderResult(fullContent);
+    dot.className = "status-dot status-done";
+    document.getElementById("statusText").textContent = `完成 (${elapsed}s)`;
+
+  } catch (e) {
+    const publicErrorClass = publicErrorClasses.has(String(e.publicErrorClass || ""))
+      ? String(e.publicErrorClass)
+      : "upstream_error";
+    appendLog(`\n❌ 请求失败: ${publicErrorClass}\n`);
+    dot.className = "status-dot status-error";
+    document.getElementById("statusText").textContent = `失败 (${publicErrorClass})`;
+  } finally {
+    STATE.generating = false;
+    refreshGenerateButton();
+  }
+}
+
+function getSafeMediaUrl(value) {
+  try {
+    const parsed = new URL(String(value || ""), window.location.origin);
+    const localHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+    if (parsed.origin === window.location.origin || localHosts.has(parsed.hostname)) {
+      return parsed.href;
+    }
+    const trustedFlowMediaHosts = new Set(["flow-content.google"]);
+    if (parsed.protocol === "https:" && trustedFlowMediaHosts.has(parsed.hostname)) {
+      return parsed.href;
+    }
+  } catch (_error) {}
+  return "";
+}
+
+function renderResult(content) {
+  const resultDiv = document.getElementById("outputResult");
+  resultDiv.innerHTML = "";
+  let hiddenExternalMedia = false;
+
+  // Render local/cache media and strict HTTPS Flow CDN media; never print full URLs in logs.
+  const imgRegex = /!\[.*?\]\((.*?)\)/g;
+  let match;
+  while ((match = imgRegex.exec(content)) !== null) {
+    const safeUrl = getSafeMediaUrl(match[1]);
+    if (!safeUrl) { hiddenExternalMedia = true; continue; }
+    const img = document.createElement("img");
+    img.src = safeUrl;
+    img.alt = "生成结果";
+    img.loading = "lazy";
+    resultDiv.appendChild(img);
+  }
+
+  let latestGeneratedVideoId = "";
+  const sourceCapabilityId = STATE.selectedCapabilityId;
+  const sourceAspectRatio = STATE.parameters.aspect_ratio;
+  const videoRegex = /<video\b[^>]*>/gi;
+  while ((match = videoRegex.exec(content)) !== null) {
+    const tag = match[0];
+    const srcMatch = tag.match(/\bsrc=['"]([^'"]+)['"]/i);
+    const mediaIdMatch = tag.match(/\bdata-media-id=['"]([^'"]+)['"]/i);
+    const safeUrl = getSafeMediaUrl(srcMatch && srcMatch[1]);
+    if (mediaIdMatch && String(mediaIdMatch[1] || "").trim()) {
+      latestGeneratedVideoId = String(mediaIdMatch[1]).trim();
+    }
+    if (!safeUrl) { hiddenExternalMedia = true; continue; }
+    const video = document.createElement("video");
+    video.src = safeUrl;
+    video.controls = true;
+    video.autoplay = true;
+    video.loop = true;
+    resultDiv.appendChild(video);
+  }
+
+  if (latestGeneratedVideoId) {
+    STATE.lastSuccessfulVideo = {
+      mediaGenerationId: latestGeneratedVideoId,
+      capabilityId: sourceCapabilityId,
+      aspectRatio: sourceAspectRatio
+    };
+  }
+
+  if (resultDiv.children.length === 0 && hiddenExternalMedia) {
+    const notice = document.createElement("pre");
+    notice.style.cssText = "color:#aaa;font-size:13px;white-space:pre-wrap;word-break:break-all;";
+    notice.textContent = "媒体已生成；外部媒体地址未在测试页直接展示。";
+    resultDiv.appendChild(notice);
+  } else if (resultDiv.children.length === 0 && content.trim()) {
+    const pre = document.createElement("pre");
+    pre.style.cssText = "color:#aaa;font-size:13px;white-space:pre-wrap;word-break:break-all;";
+    pre.textContent = content.replace(/https?:\/\/\S+/g, "[media-url-hidden]");
+    resultDiv.appendChild(pre);
+  }
+
+  if (latestGeneratedVideoId) {
+    const extendButton = document.createElement("button");
+    extendButton.type = "button";
+    extendButton.className = "btn-generate";
+    extendButton.textContent = "续写此视频";
+    extendButton.onclick = useLastVideoForExtend;
+    resultDiv.appendChild(extendButton);
+  }
+}
+
+// Auto-detect base URL
+(async function() {
+  const baseUrlInput = document.getElementById("baseUrl");
+  const apiKeyInput = document.getElementById("apiKey");
+  baseUrlInput.value = window.location.origin;
+  baseUrlInput.addEventListener("change", loadModels);
+  apiKeyInput.addEventListener("change", async () => {
+    await loadModels();
+    await loadModelAvailability();
+  });
+  document.querySelectorAll("[data-media-mode]").forEach(button => {
+    button.addEventListener("click", () => selectMediaMode(button.dataset.mediaMode));
+  });
+  document.getElementById("capabilitySelect").addEventListener("change", applyCapabilitySelection);
+  document.getElementById("imageAspectRatio").addEventListener("change", handleImageAspectChange);
+  document.getElementById("imageResolution").addEventListener("change", handleImageResolutionChange);
+  document.getElementById("videoAspectRatio").addEventListener("change", handleVideoAspectChange);
+  document.getElementById("videoDuration").addEventListener("change", handleVideoDurationChange);
+  document.getElementById("diagnosticTokenId").addEventListener("change", loadModelAvailability);
+  document.getElementById("btnUseUnverifiedDiagnostic").addEventListener("click", activateUnverifiedDiagnostic);
+  await issueTestCapability();
+  startExtensionConnectionPolling();
+  await Promise.all([loadModels(), loadDiagnosticAccounts()]);
+  await loadModelAvailability();
+})();
+document.addEventListener("visibilitychange", () => { if (document.hidden) stopExtensionConnectionPolling(); else startExtensionConnectionPolling(); });
+window.addEventListener("pagehide", stopExtensionConnectionPolling);
+</script>
+</body>
+</html>
