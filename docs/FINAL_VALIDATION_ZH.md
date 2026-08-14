@@ -6,8 +6,8 @@
 
 ## 当前结论
 
-- 自动门禁：425 项测试通过，另有 190 个子测试通过。
-- 隔离交付环境：从新建虚拟环境安装 `requirements.txt` 与 `requirements-test.txt` 后，同样 425 项通过。
+- 自动门禁：427 项测试通过，另有 190 个子测试通过。
+- 隔离交付环境：从新建虚拟环境安装 `requirements.txt` 与 `requirements-test.txt` 后，同样 427 项测试通过，另有 190 个子测试通过。
 - 干净交付扫描：禁止运行态路径 0，秘密格式命中 0。
 - Windows 开机自启：真实系统任务处于启用状态。
 - 服务重启：健康检查 200，端口只有一个监听实例。
@@ -36,7 +36,7 @@
 
 ## 自动质量门禁
 
-- 全量：425 passed，190 subtests passed。
+- 全量：427 passed，190 subtests passed。
 - 编译：`python -m compileall -q src tests scripts main.py` 通过。
 - 增量差异：开发仓库 `git diff --check` 通过，只有既有 LF/CRLF 转换提示。
 - 影策兼容、安全和资源生命周期合同通过。
@@ -71,9 +71,10 @@ secret_pattern_count=0
 4. 管理页添加 Google 账号时只需正常登录一次；Google 后续要求验证码或风控确认时仍需人工完成。
 5. 影策接入方法见 `docs/USER_GUIDE_ZH.md`，与原版差异见 `docs/FORK_DIFFERENCES_ZH.md`。
 
-## 尚在继续的验收
+## 已完成的终态验收
 
-- 低频无人值守稳定性正在继续执行；已完成的单轮结果不冒充数小时终态。
+- 新一轮约 4 小时低频无人值守终态已完成：16/16 完成，媒体 16/16，失败 0，其中图片 12、视频 4；结束时服务仍存活，项目浏览器最终归零，`browser_process_count=0`。
+- 最后第 16 轮视频真实由另一个可用账号槽位完成；验收结束后临时调整已恢复，最终 5 个槽位全部启用。这里不记录账号身份，也不记录 Cookie、Token、API Key、完整 Flow URL、提示词、媒体或响应正文。
 - Zeabur、Linux 云端登录入口和生产部署不属于本次 Windows 本地交付范围。
 
 ## 2026-08-14 最终补充验收
@@ -86,4 +87,5 @@ secret_pattern_count=0
 - 上述图片和视频都经过正常 HTTP 鉴权并复用现有 `GenerationHandler -> Flow -> 媒体解析` 主链；没有绕过生产端点或新增第二套生成实现。
 - 真实验收使用仅存在于受控验证进程内存中的临时值；没有读取、修改或输出当前 API Key，也没有把该值写入仓库、报告或压缩包。
 - 验收结束后服务已恢复正常配置：health=200，listener_count=1；任务结束后的项目浏览器进程为 0。
-- 已完成的一轮约 4 小时低频无人值守记录为 16 次计划、15 次成功且 15 次返回媒体、1 次 transport_error，浏览器最终归零；但结束时 service_alive=false，因此这份旧证据不冒充全绿终态。新的全绿终态验收继续由控制器执行。
+- 历史失败证据保留：上一轮约 4 小时低频无人值守记录为 16 次计划、15 次成功且 15 次返回媒体、1 次 `transport_error`，浏览器最终归零，但结束时 `service_alive=false`。这份旧 15/16 证据已被本次新全绿终态替代，不作为当前结论。
+- 本次新全绿终态于 `2026-08-14T04:33:22.149624Z` 完成：计划 16、完成 16、失败 0、媒体 16，图片 12、视频 4，`service_alive=true`、`browser_final_zero=true`、`browser_process_count=0`。

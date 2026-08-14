@@ -222,3 +222,20 @@ Updated: 2026-08-14
 ### Final stop-write boundary
 
 - After the post-report verification below, this ordinary ChatGPT lane stops writing. The aggregate dirty candidate remains for Codex review and real acceptance; all delivery synchronization, packaging, SHA-256, commit, push and final conclusion remain Codex-owned.
+
+## Milestone 8 — Four-hour unattended soak terminal takeover
+
+- Fresh DevSpace read at takeover: `stage=running`, `status=running`, `planned_count=16`, `completed_count=1`, `failed_count=0`, `image_count=1`, `video_count=0`, `has_media_count=1`, `service_alive=true`, `browser_final_zero=false`, `browser_process_count=0`, `started_at=2026-08-14T00:35:35.750778Z`.
+- Single-run evidence after excluding the querying PowerShell process: one `run_unattended.ps1` runner and one `real-unattended-soak*.json` report are active. The two matching `temp_adapter_host.py` Python processes are both descendants of that one runner and include one parent/child pair, so this is one host process tree rather than a duplicate soak.
+- Git baseline remains unchanged for delivery gating: development tree `main` is still at `2b9856088d47b2d29f77bc077e2340482d67e734` with the aggregate dirty candidate preserved; `final-delivery` is clean on `main` at `1660fe76fc5124e0db8c242331c1337655abd91d`.
+- The current active ordinary ChatGPT conversation URL is `https://chatgpt.com/c/6a7e65cb-7240-83ea-ac62-b36370ccca21`; it is the sole terminal-closure write lane. The prior evidence chats `https://chatgpt.com/c/6a7e6460-0df4-83ee-a05a-3935103d0fea` and `https://chatgpt.com/c/6a7e5ad5-bd08-83e9-aa3d-9f1c275333a7` are both superseded read-only evidence.
+- While the soak remains running, do not restart it, send another real task, change source code, commit, push or rebuild the delivery archive.
+- Next terminal check must require all of: `stage=finished`, `status=completed`, `failed_count=0`, `completed_count=planned_count=16`, `has_media_count=16`, `service_alive=true`, `browser_final_zero=true`, and `browser_process_count=0`. Only then may final validation documentation, isolated full tests, ignored-runtime cleanup, scanner, commit/push, ZIP/SHA rebuild and completion audit begin.
+
+## Milestone 9 — Four-hour unattended soak terminal completion
+
+- Fresh DevSpace terminal read confirms the completion gate is fully satisfied: `stage=finished`, `status=completed`, `planned_count=16`, `completed_count=16`, `failed_count=0`, `image_count=12`, `video_count=4`, `has_media_count=16`, `service_alive=true`, `browser_final_zero=true`, `browser_process_count=0`, `finished_at=2026-08-14T04:33:22.149624Z`.
+- The previous approximately four-hour run remains historical failure evidence: 16 planned, 15 successful with media, 1 `transport_error`, and `service_alive=false` at the end. It is retained for provenance but is superseded by the new 16/16 all-green terminal result and is not the current conclusion.
+- The final, 16th real video round completed through another available account slot after the controller temporarily disabled the preferred slot for that acceptance check. The temporary adjustment was then restored, and all 5 slots were enabled at completion.
+- No account identity is recorded here. This terminal documentation also does not record Cookie, Token, API Key, full Flow URL, prompt, media, or response body.
+- Latest full automated gate baseline for the terminal record is `427 passed` plus `190 subtests passed`; the older 425 count is obsolete.
