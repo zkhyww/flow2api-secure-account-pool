@@ -76,3 +76,14 @@ secret_pattern_count=0
 - 低频无人值守稳定性正在继续执行；已完成的单轮结果不冒充数小时终态。
 - Zeabur、Linux 云端登录入口和生产部署不属于本次 Windows 本地交付范围。
 
+## 2026-08-14 最终补充验收
+
+- 最新全量自动门禁：427 passed，另有 190 个 subtests passed；唯一 warning 为既有的 Windows Proactor 兼容提示，不是失败。
+- 最新编译门禁：`python -m compileall -q src tests scripts main.py` 通过。
+- 最新增量差异门禁：`git diff --check` 通过，仅有既有 LF/CRLF 提示。
+- Yingce 图片兼容端点真实 HTTP 验收：create HTTP 200，status=completed，has_media=true。
+- Yingce 10 秒视频兼容端点真实 HTTP 验收：create/poll/content HTTP 均为 200，status=completed，has_media=true，media_bytes>0。
+- 上述图片和视频都经过正常 HTTP 鉴权并复用现有 `GenerationHandler -> Flow -> 媒体解析` 主链；没有绕过生产端点或新增第二套生成实现。
+- 真实验收使用仅存在于受控验证进程内存中的临时值；没有读取、修改或输出当前 API Key，也没有把该值写入仓库、报告或压缩包。
+- 验收结束后服务已恢复正常配置：health=200，listener_count=1；任务结束后的项目浏览器进程为 0。
+- 已完成的一轮约 4 小时低频无人值守记录为 16 次计划、15 次成功且 15 次返回媒体、1 次 transport_error，浏览器最终归零；但结束时 service_alive=false，因此这份旧证据不冒充全绿终态。新的全绿终态验收继续由控制器执行。

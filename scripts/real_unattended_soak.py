@@ -28,11 +28,14 @@ SERVICE_HOST = "127.0.0.1"
 SERVICE_PORT = 8000
 COMPLETIONS_PATH = "/v1/chat/completions"
 IMAGE_MODEL = "gemini-3.1-flash-image-landscape"
+IMAGE_COMPAT_MODEL = "gemini-3.1-flash-image"
 VIDEO_MODEL = "omni_10s"
 VIDEO_COMPAT_MODEL = "omni"
 REQUEST_TIMEOUT_SECONDS = 900.0
 IMAGE_CANARY = "A simple blue circle centered on a plain white background."
 VIDEO_CANARY = "A simple blue circle moves slowly across a plain white background."
+IMAGE_CREATE_PATH = "/v1/images/generations"
+IMAGE_SMOKE_STAGE = "yingce_compat_image_smoke"
 VIDEO_CREATE_PATH = "/v1/videos"
 VIDEO_SMOKE_STAGE = "yingce_compat_video_smoke"
 VIDEO_SMOKE_DEADLINE_SECONDS = 900.0
@@ -51,6 +54,14 @@ VIDEO_SMOKE_FIELDS = {
     "poll_http",
     "content_http",
     "media_bytes",
+}
+IMAGE_SMOKE_FIELDS = {
+    "stage",
+    "status",
+    "error_class",
+    "has_media",
+    "duration_seconds",
+    "create_http",
 }
 
 ERROR_CLASSES = {
@@ -127,7 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run a low-frequency aggregate-only Flow2API soak.",
     )
-    parser.add_argument("--kind", choices=("soak", "video"), default="soak")
+    parser.add_argument("--kind", choices=("soak", "image", "video"), default="soak")
     parser.add_argument("--duration-hours", type=float, default=4.0)
     parser.add_argument("--interval-seconds", type=float, default=900.0)
     parser.add_argument("--video-every", type=int, default=8)
@@ -373,6 +384,85 @@ def run_real_attempt(kind: str, api_key: str) -> AttemptResult:
         latency_seconds=time.monotonic() - started,
         service_alive=service_alive,
     )
+
+
+def _image_smoke_result(
+    *,
+    status: str,
+    error_class: str,
+    has_media: bool,
+    duration_seconds: float,
+    create_http: int,
+) -> dict:
+    result = {
+        "stage": IMAGE_SMOKE_STAGE,
+        "status": status,
+        "error_class": error_class,
+        "has_media": bool(has_media),
+        "duration_seconds": round(max(0.0, float(duration_seconds)), 3),
+        "create_http": max(0, int(create_http)),
+    }
+    if set(result) != IMAGE_SMOKE_FIELDS:
+        raise ValueError("image smoke result violates the strict allowlist")
+    return result
+
+
+def run_yingce_image_smoke(
+    api_key: str,
+    *,
+    client_factory=None,
+    monotonic=time.monotonic,
+) -> dict:
+    started = float(monotonic())
+    create_http = 0
+    factory = client_factory or _new_video_client
+
+    def finish(status: str, error_class: str, has_media: bool) -> dict:
+        return _image_smoke_result(
+            status=status,
+            error_class=error_class,
+            has_media=has_media,
+            duration_seconds=float(monotonic()) - started,
+            create_http=create_http,
+        )
+
+    try:
+        client = factory(api_key)
+    except Exception:
+        return finish("failed", "client_http_error", False)
+
+    try:
+        try:
+            response = client.post(
+                IMAGE_CREATE_PATH,
+                json={"model": IMAGE_COMPAT_MODEL, "prompt": IMAGE_CANARY, "n": 1},
+                timeout=VIDEO_CLIENT_TIMEOUT_SECONDS,
+            )
+        except httpx.HTTPError:
+            return finish("failed", "client_http_error", False)
+
+        create_http = int(getattr(response, "status_code", 0) or 0)
+        try:
+            body = response.json()
+        except (TypeError, ValueError):
+            return finish("failed", "client_http_error", False)
+        if not 200 <= create_http < 300:
+            return finish(
+                "failed",
+                _safe_video_error_class(body, "client_http_error"),
+                False,
+            )
+        data = body.get("data") if isinstance(body, dict) else None
+        first = data[0] if isinstance(data, list) and data and isinstance(data[0], dict) else {}
+        has_media = bool(
+            str(first.get("b64_json") or "").strip()
+            or str(first.get("url") or "").strip()
+        )
+        if not has_media:
+            return finish("failed", "media_empty", False)
+        return finish("completed", "", True)
+    finally:
+        _close_video_client(client)
 
 
 def run_yingce_video_smoke(
@@ -713,6 +803,10 @@ def main() -> int:
     arguments = build_parser().parse_args()
     try:
         api_key = require_api_key(os.environ)
+        if arguments.kind == "image":
+            result = run_yingce_image_smoke(api_key)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 0 if result["status"] == "completed" and result["has_media"] else 1
         if arguments.kind == "video":
             result = run_yingce_video_smoke(api_key)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))

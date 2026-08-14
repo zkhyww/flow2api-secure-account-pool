@@ -89,6 +89,15 @@ x-goog-api-key: <your_api_key>
 
 **当前影策视频 task ID 只存在于本进程内。服务重启后，旧 task ID 不保证还能查询。**
 
+Codex 做受控真实验收时，可使用现有 `scripts/real_unattended_soak.py`。验收凭据只从既有环境变量读取，不写入命令行或报告：
+
+```text
+venv\Scripts\python.exe scripts\real_unattended_soak.py --kind image
+venv\Scripts\python.exe scripts\real_unattended_soak.py --kind video
+```
+
+`--kind image` 只执行一次图片 create，不因传输失败自动重复生成；`--kind video` 使用幂等 create 后继续 poll 和 content。两种 smoke 只报告状态、错误分类、是否得到媒体、耗时和 HTTP 状态；视频额外报告媒体字节数，不输出任务标识、凭据、提示词、完整 URL 或媒体正文。真实调用只由 Codex 在受控验收阶段执行，不属于普通自动门禁。
+
 ## 8. 媒体代理安全边界
 
 显式 HTTP 媒体代理会走固定解析的安全隧道：服务先校验官方域名、HTTPS、标准端口和公网 DNS，再把代理连接目标固定到预检的公网 IP；TLS 证书仍按原始官方域名验证。redirect 每一跳都会重新检查，下载也有流式字节上限。

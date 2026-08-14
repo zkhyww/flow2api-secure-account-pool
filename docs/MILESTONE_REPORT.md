@@ -169,4 +169,56 @@ Updated: 2026-08-14
 
 ### Stop-write boundary
 
-- Source/test/document writes for this coding lane end with this milestone update. No real service/Windows restart, real account operation, real Flow image/video request, real process cleanup, database-content read, credential read, packaging, commit, push, repository creation or deployment was performed.
+- Source/test/document writes for Milestone 6 ended with that milestone update. No real service/Windows restart, real account operation, real Flow image/video request, real process cleanup, database-content read, credential read, packaging, commit, push, repository creation or deployment was performed.
+
+## Milestone 7 — Final pre-handoff evidence audit
+
+### Fresh-read scope and conversation provenance
+
+- Fresh workspace evidence remains `D:\\CodexWorkspaces\\Flow2API-Secure-Account-Pool\\repo`, branch `main`, HEAD `2b9856088d47b2d29f77bc077e2340482d67e734`. Opening porcelain count was 65 entries and the aggregate dirty candidate was preserved in place; no reset, clean, checkout, stage, commit or push was used.
+- The current ordinary ChatGPT conversation recorded in the provenance section is the active write lane for this final audit. The former lane named “代码审计与修复” is superseded evidence only and must not write this workspace.
+- Fresh read confirmed that the Yingce image create and video create/poll/content endpoints all retain `verify_api_key_flexible` HTTP authentication and reuse the same application `GenerationHandler`; video execution additionally reuses the existing compatibility registry and media materialization path. No second generation client or auth-bypass production route was added.
+- Fresh read also reconfirmed `requirements-test.txt` contains only unpinned `pytest` and `Pillow`, production `requirements.txt` remains separate, README and the Chinese guide describe the runtime/test dependency split, and the count-only scanner still exposes only `files_scanned`, `forbidden_path_count` and `secret_pattern_count`.
+
+### Reproducible RED and minimal GREEN
+
+- **Missing Yingce image real-smoke entry:** the existing safe acceptance harness already covered video `POST /v1/videos` → poll → `/content`, but it had no equivalent command for `POST /v1/images/generations`. RED first: `tests/test_real_unattended_soak_contract.py` failed with `2 failed, 11 passed, 7 subtests passed` because `--kind image` was not a valid CLI choice and `run_yingce_image_smoke` did not exist.
+- Minimal GREEN changed only the existing acceptance harness and its contract. `--kind image` now makes one loopback image-create call using the existing environment-only acceptance credential and existing HTTP auth; it deliberately does not retry a transport-failed image create. The output allowlist is limited to `stage`, `status`, `error_class`, `has_media`, `duration_seconds` and `create_http`, so media data/URL, task identifiers, credentials and prompts are not emitted. The existing video smoke behavior remains create-with-idempotency → poll → content.
+- Focused RED→GREEN for the harness: `13 passed, 7 subtests passed`. The Chinese guide now records the two controller commands and the privacy/retry boundary. No Yingce production endpoint, auth dependency, `GenerationHandler`, account pool, browser lifecycle or model catalog code changed for this RED.
+
+### Adversarial no-RED review
+
+- The expanded focused audit covered Yingce adapter/security/resource lifecycle, stale-orphan ownership and startup cleanup failure, personal browser lifecycle/process cap/idle wake-up, 0/1/200/500 synthetic stress, account-model availability, canonical/test-page model catalog, Windows autostart, clean-delivery docs/scanner and test-dependency manifest. Result: `176 passed, 120 subtests passed` with one known non-failing `curl_cffi` Windows Proactor warning.
+- Browser stale selection remains conservative: ordinary Chrome/Edge profiles are not repo ownership, missing/non-positive parent metadata is preserved, live-parent or parent-liveness probe uncertainty is preserved, and process-enumeration/cleanup exceptions cannot block application startup. No real browser process was inspected or terminated here.
+- Browser pool tests continue to enforce the 10-process cap, queue excess demand, preserve available-worker concurrency, reclaim idle runtime and recreate on demand; the synthetic scale contracts continue to cover 0/1/200/500 accounts. No reproducible browser/concurrency RED was found.
+- Account-specific model availability remains a separate verified fact from the six-capability catalog, and the test page labels `available`/`unavailable` explicitly while keeping hidden diagnostic mappings out of the normal public selection flow. No reproducible API/UI availability-mixing RED was found, so no UI/catalog code was changed.
+
+### Final serial automatic gates
+
+- Focused audit: `176 passed, 120 subtests passed`; one existing non-failing `curl_cffi` Windows Proactor warning.
+- Full pytest: `427 passed, 190 subtests passed`; the same warning only. The two-test increase from the previous 425 baseline is exactly the new Yingce image-smoke CLI/behavior contract.
+- `venv/Scripts/python.exe -m compileall -q src tests scripts main.py`: PASS with no output. The first equivalent invocation was blocked by the DevSpace safety layer before execution; the unchanged validation target was immediately rerun with `./`-qualified paths and passed.
+- `git diff --check`: PASS; only existing LF/CRLF conversion warnings were emitted.
+- Live-tree scanner: `files_scanned=151`, `forbidden_path_count=6`, `secret_pattern_count=0`. Exit code remains intentionally non-zero because runtime forbidden paths exist in the live checkout; the secret count is zero. A prepared clean delivery copy must still reach `0/0` before packaging.
+
+### Files changed by Milestone 7
+
+- `scripts/real_unattended_soak.py` — add one-shot Yingce image compatibility smoke and `--kind image` CLI entry while retaining environment-only auth and strict result fields.
+- `tests/test_real_unattended_soak_contract.py` — add the two RED→GREEN image-smoke contracts.
+- `docs/USER_GUIDE_ZH.md` — document controller-only image/video smoke invocation and privacy/retry boundaries.
+- `docs/MILESTONE_REPORT.md` — record this final audit, evidence and handoff boundary.
+
+### Still unverified / Codex-controlled acceptance
+
+- This lane did not send a real image or video generation, read a real credential/database/configuration, restart the service or Windows, inspect/kill real Chrome/Edge, mutate Task Scheduler, package a clean copy, compute delivery SHA-256, create a repository, commit or push.
+- Codex still needs real Yingce compatibility acceptance against the running candidate: first image create, then video create/poll/content, while retaining the normal HTTP auth contract. No auth dependency override is required for this path because the acceptance harness already accepts the existing credential through its environment-only interface.
+- Codex still needs controlled stale-orphan restart acceptance, real autostart/launcher recheck, normal on-demand browser → idle reclaim → re-wake evidence, and the clean-copy `forbidden_path_count=0` / `secret_pattern_count=0` gate before packaging.
+
+### Codex next executable command
+
+- With the approved acceptance credential already present in the existing environment-only slot, run: `venv\Scripts\python.exe scripts\real_unattended_soak.py --kind image`.
+- If that controlled image smoke completes with `has_media=true`, the next compatibility command is `venv\Scripts\python.exe scripts\real_unattended_soak.py --kind video`; do not retry paid work blindly after an unexpected result.
+
+### Final stop-write boundary
+
+- After the post-report verification below, this ordinary ChatGPT lane stops writing. The aggregate dirty candidate remains for Codex review and real acceptance; all delivery synchronization, packaging, SHA-256, commit, push and final conclusion remain Codex-owned.

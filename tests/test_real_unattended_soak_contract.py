@@ -56,6 +56,14 @@ VIDEO_SMOKE_FIELDS = {
     "content_http",
     "media_bytes",
 }
+IMAGE_SMOKE_FIELDS = {
+    "stage",
+    "status",
+    "error_class",
+    "has_media",
+    "duration_seconds",
+    "create_http",
+}
 
 
 class _FakeClock:
@@ -154,6 +162,11 @@ class RealUnattendedSoakContractTests(unittest.TestCase):
         harness = self._load_harness()
         arguments = harness.build_parser().parse_args(["--kind", "video"])
         self.assertEqual("video", arguments.kind)
+
+    def test_image_smoke_cli_exposes_single_image_kind(self):
+        harness = self._load_harness()
+        arguments = harness.build_parser().parse_args(["--kind", "image"])
+        self.assertEqual("image", arguments.kind)
 
     def test_video_smoke_default_client_disables_environment_proxies(self):
         harness = self._load_harness()
@@ -275,6 +288,40 @@ class RealUnattendedSoakContractTests(unittest.TestCase):
 
         self.assertEqual(report, json.loads(output.read_text(encoding="utf-8")))
         self.assertEqual([output], list(output_dir.iterdir()))
+
+    def test_image_smoke_posts_once_and_reports_only_allowlisted_outcome(self):
+        harness = self._load_harness()
+        private_media_marker = "synthetic-private-image-media-marker"
+        factory = _ScriptedClientFactory([
+            [
+                (
+                    "POST",
+                    "/v1/images/generations",
+                    _VideoResponse(200, {"data": [{"b64_json": private_media_marker}]}),
+                )
+            ]
+        ])
+        clock = _FakeClock()
+
+        result = harness.run_yingce_image_smoke(
+            "synthetic-key",
+            client_factory=factory,
+            monotonic=clock.monotonic,
+        )
+
+        self.assertEqual(IMAGE_SMOKE_FIELDS, set(result))
+        self.assertEqual("completed", result["status"])
+        self.assertTrue(result["has_media"])
+        self.assertEqual(200, result["create_http"])
+        self.assertEqual(1, len(factory.calls))
+        method, path, kwargs = factory.calls[0]
+        self.assertEqual(("POST", "/v1/images/generations"), (method, path))
+        self.assertEqual(harness.IMAGE_COMPAT_MODEL, kwargs["json"]["model"])
+        serialized = json.dumps(result)
+        self.assertNotIn(private_media_marker, serialized)
+        self.assertNotIn("synthetic-key", serialized)
+        self.assertNotIn(harness.IMAGE_CANARY, serialized)
+        self.assertNotIn("http://", serialized)
 
     def test_video_smoke_poll_disconnect_reuses_same_task_without_second_post(self):
         harness = self._load_harness()
