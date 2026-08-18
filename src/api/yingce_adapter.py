@@ -77,6 +77,12 @@ class VideoMediaMaterializationError(ValueError):
         self.error_class = error_class
 
 
+class VideoParameterError(ValueError):
+    def __init__(self, capability: Optional[Dict[str, Any]] = None):
+        super().__init__("unsupported_video_parameters")
+        self.capability = capability
+
+
 class ImageGenerationRequest(BaseModel):
     model: str
     prompt: str
@@ -303,55 +309,125 @@ def _video_aspect_ratio(size: Optional[str]) -> Optional[str]:
     value = str(size or "").strip().lower()
     if not value:
         return None
-    if value in {"16:9", "landscape"}:
+    if value in {"16:9", "landscape", "1792x1024", "1280x720"}:
         return "16:9"
-    if value in {"9:16", "portrait"}:
+    if value in {"9:16", "portrait", "1024x1792", "720x1280"}:
         return "9:16"
-    match = re.fullmatch(r"(\d{2,5})\s*[xX]\s*(\d{2,5})", value)
-    if not match:
-        raise ValueError("invalid_video_size")
-    width, height = int(match.group(1)), int(match.group(2))
-    if width <= 0 or height <= 0:
-        raise ValueError("invalid_video_size")
-    return "9:16" if height > width else "16:9"
+    raise ValueError("invalid_video_size")
+
+
+def _video_allowed_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
+    options = entry.get("options") or {}
+    return {
+        "capability_id": str(entry.get("capability_id") or ""),
+        "display_name": str(entry.get("display_name") or ""),
+        "aspect_ratio": [
+            str(item.get("value"))
+            for item in options.get("aspect_ratio", [])
+            if item.get("validation_status") != "hidden"
+        ],
+        "duration_seconds": [
+            int(item.get("value"))
+            for item in options.get("duration_seconds", [])
+            if item.get("validation_status") != "hidden"
+        ],
+        "resolution": ["native", "nativeP", "720P"],
+        "images": {
+            "min": int(entry.get("min_images") or 0),
+            "max": int(entry.get("max_images") or 0),
+        },
+    }
+
+
+def _video_parameter_error(entry: Dict[str, Any]) -> JSONResponse:
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": {
+                "message": "Unsupported video parameters",
+                "type": "invalid_request_error",
+                "code": "unsupported_video_parameters",
+                "allowed": _video_allowed_metadata(entry),
+            }
+        },
+    )
 
 
 def _resolve_video_model(
     model: str,
     size: Optional[str],
     seconds: Optional[int],
-) -> tuple[str, int]:
+    reference_count: int,
+) -> tuple[str, int, Dict[str, Any]]:
     requested = str(model or "").strip()
-    entry = None
+    video_catalog = [
+        candidate
+        for candidate in build_public_model_catalog(MODEL_CONFIG)
+        if candidate.get("model_type") == "video"
+    ]
+    entry = next(
+        (
+            candidate
+            for candidate in video_catalog
+            if requested in {candidate.get("id"), candidate.get("capability_id")}
+        ),
+        None,
+    )
     matched_mapping = None
-    for candidate in build_public_model_catalog(MODEL_CONFIG):
-        if candidate.get("model_type") != "video":
-            continue
-        mappings = candidate.get("compatibility_map", [])
-        matched_mapping = next(
-            (item for item in mappings if item.get("model_id") == requested),
-            None,
-        )
-        if requested in {candidate.get("id"), candidate.get("capability_id")} or matched_mapping:
-            entry = candidate
-            break
-    if entry is None:
-        raise ValueError("unsupported_video_model")
 
-    aspect_ratio = _video_aspect_ratio(size)
+    if entry is None:
+        legacy_matches = []
+        for candidate in video_catalog:
+            candidate_mapping = next(
+                (
+                    item
+                    for item in candidate.get("compatibility_map", [])
+                    if item.get("model_id") == requested
+                ),
+                None,
+            )
+            if candidate_mapping is not None:
+                legacy_matches.append((candidate, candidate_mapping))
+
+        if not legacy_matches:
+            raise ValueError("unsupported_video_model")
+
+        compatible_legacy_matches = [
+            (candidate, candidate_mapping)
+            for candidate, candidate_mapping in legacy_matches
+            if int(candidate.get("min_images") or 0)
+            <= reference_count
+            <= int(candidate.get("max_images") or 0)
+        ]
+        if len(compatible_legacy_matches) != 1:
+            raise VideoParameterError(legacy_matches[0][0])
+        entry, matched_mapping = compatible_legacy_matches[0]
+
+    min_images = int(entry.get("min_images") or 0)
+    max_images = int(entry.get("max_images") or 0)
+    if reference_count < min_images or reference_count > max_images:
+        raise VideoParameterError(entry)
+
+    try:
+        aspect_ratio = _video_aspect_ratio(size)
+    except ValueError as exc:
+        raise VideoParameterError(entry) from exc
     if aspect_ratio is None:
-        if matched_mapping and requested != entry.get("id"):
+        if matched_mapping:
             aspect_ratio = str(matched_mapping["parameters"]["aspect_ratio"])
         else:
             aspect_ratio = str(entry["default_parameters"]["aspect_ratio"])
 
-    if seconds is None:
-        if matched_mapping and requested != entry.get("id"):
-            duration = int(matched_mapping["parameters"]["duration_seconds"])
+    try:
+        if seconds is None:
+            if matched_mapping:
+                duration = int(matched_mapping["parameters"]["duration_seconds"])
+            else:
+                duration = int(entry["default_parameters"]["duration_seconds"])
         else:
-            duration = int(entry["default_parameters"]["duration_seconds"])
-    else:
-        duration = int(seconds)
+            duration = int(seconds)
+    except (TypeError, ValueError) as exc:
+        raise VideoParameterError(entry) from exc
 
     selected = next(
         (
@@ -364,30 +440,15 @@ def _resolve_video_model(
         None,
     )
     if selected is None:
-        raise ValueError("unsupported_video_parameters")
-    return str(selected["model_id"]), duration
+        raise VideoParameterError(entry)
+    return str(selected["model_id"]), duration, entry
 
 
 def _apply_video_resolution(resolved_model: str, resolution_name: Optional[str]) -> str:
     value = str(resolution_name or "").strip().lower()
-    if not value:
+    if value in {"", "native", "nativep", "720p"}:
         return resolved_model
-    if value not in {"4k", "1080p"}:
-        raise ValueError("unsupported_video_resolution")
-
-    candidates = [f"{resolved_model}_{value}"]
-    if resolved_model.endswith("_landscape_8s"):
-        base = resolved_model[: -len("_landscape_8s")]
-        candidates.append(f"{base}_{value}")
-    elif resolved_model.endswith("_portrait_8s"):
-        base = resolved_model[: -len("_portrait_8s")]
-        candidates.append(f"{base}_portrait_{value}")
-
-    for candidate in candidates:
-        config = MODEL_CONFIG.get(candidate)
-        if config and config.get("type") == "video" and config.get("upsample"):
-            return candidate
-    raise ValueError("unsupported_video_resolution")
+    raise VideoParameterError()
 
 
 def _video_request_fingerprint(
@@ -863,15 +924,6 @@ async def create_video(
     _bind_video_task_expiry_hook()
     if not prompt.strip():
         return _stable_error("invalid_prompt", 400, "Prompt cannot be empty")
-    try:
-        resolved_model, duration = _resolve_video_model(model, size, seconds)
-    except (TypeError, ValueError):
-        return _stable_error("unsupported_model", 400, "Unsupported video request")
-
-    try:
-        resolved_model = _apply_video_resolution(resolved_model, resolution_name)
-    except ValueError:
-        return _stable_error("unsupported_resolution", 400, "Unsupported video resolution")
 
     reference_images = []
     for upload in input_reference or []:
@@ -884,8 +936,29 @@ async def create_video(
         if not reference_bytes:
             return _stable_error("invalid_reference", 400, "Reference image cannot be empty")
         reference_images.append(reference_bytes)
-    if reference_images and not MODEL_CONFIG[resolved_model].get("supports_images", False):
-        return _stable_error("reference_not_supported", 400, "Selected video model does not support references")
+
+    try:
+        resolved_model, duration, selected_capability = _resolve_video_model(
+            model,
+            size,
+            seconds,
+            len(reference_images),
+        )
+    except VideoParameterError as exc:
+        if exc.capability is not None:
+            return _video_parameter_error(exc.capability)
+        return _stable_error(
+            "unsupported_video_parameters",
+            400,
+            "Unsupported video parameters",
+        )
+    except (TypeError, ValueError):
+        return _stable_error("unsupported_model", 400, "Unsupported video request")
+
+    try:
+        resolved_model = _apply_video_resolution(resolved_model, resolution_name)
+    except VideoParameterError:
+        return _video_parameter_error(selected_capability)
 
     reused = False
     try:

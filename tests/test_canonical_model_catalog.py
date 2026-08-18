@@ -15,20 +15,136 @@ EXPECTED_CAPABILITY_IDS = {
     "nano-banana-2",
     "nano-banana-pro",
     "omni-flash",
+    "omni-flash-references",
     "veo-3.1-lite",
+    "veo-3.1-lite-first-frame",
+    "veo-3.1-lite-first-last",
     "veo-3.1-fast",
+    "veo-3.1-fast-first-frame",
+    "veo-3.1-fast-first-last",
+    "veo-3.1-fast-references",
     "veo-3.1-quality",
+    "veo-3.1-quality-first-frame",
+    "veo-3.1-quality-first-last",
 }
 EXPECTED_IMAGE_CAPABILITIES = {"nano-banana-2", "nano-banana-pro"}
-EXPECTED_VIDEO_CAPABILITIES = {
-    "omni-flash",
-    "veo-3.1-lite",
-    "veo-3.1-fast",
-    "veo-3.1-quality",
-}
+EXPECTED_VIDEO_CAPABILITIES = EXPECTED_CAPABILITY_IDS - EXPECTED_IMAGE_CAPABILITIES
 IMAGE_RATIOS = {"16:9", "9:16", "1:1", "4:3", "3:4"}
 IMAGE_RESOLUTIONS = {"1K", "2K", "4K"}
 VIDEO_RATIOS = {"16:9", "9:16"}
+
+EXPECTED_VIDEO_SELECTIONS = {
+    "omni-flash": {
+        "mode": "text_to_video",
+        "label": "文生视频",
+        "images": (0, 0),
+        "mappings": {
+            ("16:9", "8"): "omni",
+            ("9:16", "8"): "omni_portrait",
+            ("16:9", "10"): "omni_10s",
+            ("9:16", "10"): "omni_portrait_10s",
+        },
+    },
+    "omni-flash-references": {
+        "mode": "references_to_video",
+        "label": "参考图生视频",
+        "images": (1, 3),
+        "mappings": {
+            ("16:9", "8"): "omni",
+            ("9:16", "8"): "omni_portrait",
+        },
+    },
+    "veo-3.1-lite": {
+        "mode": "text_to_video",
+        "label": "文生视频",
+        "images": (0, 0),
+        "mappings": {
+            ("16:9", "8"): "veo_3_1_t2v_lite_landscape_8s",
+            ("9:16", "8"): "veo_3_1_t2v_lite_portrait_8s",
+        },
+    },
+    "veo-3.1-lite-first-frame": {
+        "mode": "first_frame_to_video",
+        "label": "首帧生视频",
+        "images": (1, 1),
+        "mappings": {
+            ("16:9", "8"): "veo_3_1_i2v_lite_landscape_8s",
+            ("9:16", "8"): "veo_3_1_i2v_lite_portrait_8s",
+        },
+    },
+    "veo-3.1-lite-first-last": {
+        "mode": "first_last_frame_to_video",
+        "label": "首尾帧生视频",
+        "images": (2, 2),
+        "mappings": {
+            ("16:9", "8"): "veo_3_1_interpolation_lite_landscape_8s",
+            ("9:16", "8"): "veo_3_1_interpolation_lite_portrait_8s",
+        },
+    },
+    "veo-3.1-fast": {
+        "mode": "text_to_video",
+        "label": "文生视频",
+        "images": (0, 0),
+        "mappings": {
+            ("16:9", "8"): "veo_3_1_t2v_fast_landscape_8s",
+            ("9:16", "8"): "veo_3_1_t2v_fast_portrait_8s",
+        },
+    },
+    "veo-3.1-fast-first-frame": {
+        "mode": "first_frame_to_video",
+        "label": "首帧生视频",
+        "images": (1, 1),
+        "mappings": {
+            ("16:9", "8"): "veo_3_1_i2v_s_fast_landscape_8s_fl",
+            ("9:16", "8"): "veo_3_1_i2v_s_fast_portrait_8s_fl",
+        },
+    },
+    "veo-3.1-fast-first-last": {
+        "mode": "first_last_frame_to_video",
+        "label": "首尾帧生视频",
+        "images": (2, 2),
+        "mappings": {
+            ("16:9", "8"): "veo_3_1_i2v_s_fast_landscape_8s_fl",
+            ("9:16", "8"): "veo_3_1_i2v_s_fast_portrait_8s_fl",
+        },
+    },
+    "veo-3.1-fast-references": {
+        "mode": "references_to_video",
+        "label": "参考图生视频",
+        "images": (1, 3),
+        "mappings": {
+            ("16:9", "8"): "veo_3_1_r2v_fast_landscape",
+            ("9:16", "8"): "veo_3_1_r2v_fast_portrait",
+        },
+    },
+    "veo-3.1-quality": {
+        "mode": "text_to_video",
+        "label": "文生视频",
+        "images": (0, 0),
+        "mappings": {
+            ("16:9", "8"): "veo_3_1_t2v_landscape_8s",
+            ("9:16", "8"): "veo_3_1_t2v_portrait_8s",
+        },
+    },
+    "veo-3.1-quality-first-frame": {
+        "mode": "first_frame_to_video",
+        "label": "首帧生视频",
+        "images": (1, 1),
+        "mappings": {
+            ("16:9", "8"): "veo_3_1_i2v_s_landscape_8s",
+            ("9:16", "8"): "veo_3_1_i2v_s_portrait_8s",
+        },
+    },
+    "veo-3.1-quality-first-last": {
+        "mode": "first_last_frame_to_video",
+        "label": "首尾帧生视频",
+        "images": (2, 2),
+        "mappings": {
+            ("16:9", "8"): "veo_3_1_i2v_s_landscape_8s",
+            ("9:16", "8"): "veo_3_1_i2v_s_portrait_8s",
+        },
+    },
+}
 
 
 def _by_capability(entries):
@@ -44,7 +160,7 @@ class CanonicalModelCatalogUnitTests(unittest.TestCase):
         self.entries = build_public_model_catalog(MODEL_CONFIG)
         self.catalog = _by_capability(self.entries)
 
-    def test_catalog_exposes_two_image_and_four_video_capabilities(self):
+    def test_catalog_exposes_two_image_and_twelve_explicit_video_capabilities(self):
         self.assertEqual(EXPECTED_CAPABILITY_IDS, set(self.catalog))
         self.assertEqual(
             EXPECTED_IMAGE_CAPABILITIES,
@@ -62,6 +178,19 @@ class CanonicalModelCatalogUnitTests(unittest.TestCase):
                 if entry["model_type"] == "video"
             },
         )
+        self.assertNotIn("veo-3.1-quality-references", self.catalog)
+
+    def test_video_discovery_ids_are_capability_ids_and_internal_models_stay_in_compatibility_map(self):
+        for capability_id in EXPECTED_VIDEO_CAPABILITIES:
+            with self.subTest(capability_id=capability_id):
+                entry = self.catalog[capability_id]
+                self.assertEqual(capability_id, entry["id"])
+                internal_model_ids = {
+                    mapping["model_id"] for mapping in entry["compatibility_map"]
+                }
+                self.assertTrue(internal_model_ids)
+                self.assertTrue(internal_model_ids.issubset(MODEL_CONFIG))
+                self.assertNotIn(entry["id"], internal_model_ids)
 
     def test_image_options_are_parameterized_and_map_to_compatible_ids(self):
         for capability_id in EXPECTED_IMAGE_CAPABILITIES:
@@ -140,48 +269,56 @@ class CanonicalModelCatalogUnitTests(unittest.TestCase):
             resolution_labels,
         )
 
-    def test_veo_video_options_remain_parameterized_and_fixed_to_eight_seconds(self):
-        expected_ids = {
-            "veo-3.1-lite": {
-                "16:9": "veo_3_1_t2v_lite_landscape_8s",
-                "9:16": "veo_3_1_t2v_lite_portrait_8s",
-            },
-            "veo-3.1-fast": {
-                "16:9": "veo_3_1_t2v_fast_landscape_8s",
-                "9:16": "veo_3_1_t2v_fast_portrait_8s",
-            },
-            "veo-3.1-quality": {
-                "16:9": "veo_3_1_t2v_landscape_8s",
-                "9:16": "veo_3_1_t2v_portrait_8s",
-            },
-        }
-        for capability_id, expected_map in expected_ids.items():
-            entry = self.catalog[capability_id]
-            self.assertEqual(VIDEO_RATIOS, _option_values(entry, "aspect_ratio"))
-            self.assertEqual({"8"}, _option_values(entry, "duration_seconds"))
-            actual_map = {
-                item["parameters"]["aspect_ratio"]: item["model_id"]
-                for item in entry["compatibility_map"]
-            }
-            self.assertEqual(expected_map, actual_map)
-            self.assertTrue(
-                all(
-                    item["parameters"]["duration_seconds"] == "8"
-                    and item["validation_status"] == "validated"
-                    for item in entry["compatibility_map"]
+    def test_video_capabilities_expose_exact_generation_modes_and_native_resolution(self):
+        for capability_id, expected in EXPECTED_VIDEO_SELECTIONS.items():
+            with self.subTest(capability_id=capability_id):
+                entry = self.catalog[capability_id]
+                self.assertEqual(VIDEO_RATIOS, _option_values(entry, "aspect_ratio"))
+                self.assertEqual({"native"}, _option_values(entry, "resolution"))
+                self.assertEqual("native", entry["default_parameters"]["resolution"])
+                self.assertEqual(expected["mode"], entry["generation_mode"])
+                self.assertEqual(
+                    [{"id": expected["mode"], "label": expected["label"]}],
+                    entry["generation_modes"],
                 )
+                self.assertEqual(expected["images"][0], entry["min_images"])
+                self.assertEqual(expected["images"][1], entry["max_images"])
+                self.assertEqual(expected["images"][1] > 0, entry["supports_images"])
+                self.assertTrue(str(entry["image_semantics"]).strip())
+                self.assertTrue(str(entry["usage_guide"]).strip())
+                self.assertIsInstance(entry["unsupported_notes"], list)
+                self.assertTrue(entry["unsupported_notes"])
+                actual_map = {
+                    (
+                        item["parameters"]["aspect_ratio"],
+                        item["parameters"]["duration_seconds"],
+                    ): item["model_id"]
+                    for item in entry["compatibility_map"]
+                }
+                self.assertEqual(expected["mappings"], actual_map)
+                self.assertTrue(
+                    all(
+                        item["validation_status"] == "validated"
+                        and item["model_id"] in MODEL_CONFIG
+                        and MODEL_CONFIG[item["model_id"]]["type"] == "video"
+                        for item in entry["compatibility_map"]
+                    )
+                )
+
+        self.assertEqual(
+            {"8", "10"},
+            _option_values(self.catalog["omni-flash"], "duration_seconds"),
+        )
+        for capability_id in EXPECTED_VIDEO_CAPABILITIES - {"omni-flash"}:
+            self.assertEqual(
+                {"8"},
+                _option_values(self.catalog[capability_id], "duration_seconds"),
             )
 
-    def test_omni_flash_copy_describes_the_current_text_to_video_entry(self):
-        omni = self.catalog["omni-flash"]
-        self.assertEqual(
-            "适合通用的 8 秒或 10 秒文生视频任务；实际速度与权限以账号为准。",
-            omni["description"],
-        )
-        self.assertNotIn("参考图", omni["description"])
-        self.assertFalse(omni["supports_images"])
-        self.assertEqual(0, omni["min_images"])
-        self.assertEqual(0, omni["max_images"])
+    def test_public_image_modes_do_not_overclaim_unverified_reference_paths(self):
+        self.assertIn("10 秒", " ".join(self.catalog["omni-flash-references"]["unsupported_notes"]))
+        self.assertIn("Quality", " ".join(self.catalog["veo-3.1-quality-first-frame"]["unsupported_notes"]))
+        self.assertNotIn("veo-3.1-quality-references", self.catalog)
 
     def test_extend_is_an_action_not_a_selectable_model(self):
         public_ids = {entry["id"] for entry in self.entries}
@@ -284,13 +421,21 @@ class CanonicalModelCatalogApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, response.status_code)
         return response.json()["data"]
 
+    async def test_v1_models_exposes_unique_public_ids_for_explicit_video_capabilities(self):
+        public_models = await self._get_public_models()
+        public_ids = [entry["id"] for entry in public_models]
+        self.assertEqual(len(public_ids), len(set(public_ids)))
+        for entry in public_models:
+            if entry["model_type"] == "video":
+                self.assertEqual(entry["capability_id"], entry["id"])
+
     async def test_public_and_admin_test_catalogs_share_all_visible_mappings_without_hidden_entries(self):
         public_models = await self._get_public_models()
         test_models = await self._get_test_models()
         self.assertEqual(EXPECTED_CAPABILITY_IDS, set(_by_capability(public_models)))
         self.assertEqual(EXPECTED_CAPABILITY_IDS, set(_by_capability(test_models)))
-        self.assertEqual(6, len(public_models))
-        self.assertEqual(6, len(test_models))
+        self.assertEqual(14, len(public_models))
+        self.assertEqual(14, len(test_models))
 
         def visible_mapping_contract(entries):
             return {

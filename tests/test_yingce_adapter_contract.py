@@ -99,6 +99,106 @@ class YingceAdapterAuthContractTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
         return payload
 
+    def _video_reference_files(self, count):
+        return [
+            (
+                "input_reference[]",
+                (
+                    f"reference-{index}.png",
+                    f"synthetic-reference-{index}".encode("ascii"),
+                    "image/png",
+                ),
+            )
+            for index in range(count)
+        ]
+
+    def test_video_public_capability_ids_are_exact_and_never_disambiguated_by_image_count(self):
+        explicit_cases = (
+            ("omni-flash", 0, "omni", "omni-flash"),
+            ("omni-flash-references", 1, "omni", "omni-flash-references"),
+            (
+                "veo-3.1-fast-first-frame",
+                1,
+                "veo_3_1_i2v_s_fast_landscape_8s_fl",
+                "veo-3.1-fast-first-frame",
+            ),
+            (
+                "veo-3.1-fast-first-last",
+                2,
+                "veo_3_1_i2v_s_fast_landscape_8s_fl",
+                "veo-3.1-fast-first-last",
+            ),
+        )
+        for model, reference_count, expected_model, expected_capability in explicit_cases:
+            with self.subTest(model=model, reference_count=reference_count):
+                resolved_model, duration, capability = yingce_adapter._resolve_video_model(
+                    model,
+                    "16:9",
+                    8,
+                    reference_count,
+                )
+                self.assertEqual(expected_model, resolved_model)
+                self.assertEqual(8, duration)
+                self.assertEqual(expected_capability, capability["capability_id"])
+
+        rejected_cases = (
+            ("omni-flash", 1),
+            ("omni-flash-references", 0),
+            ("veo-3.1-fast-first-frame", 2),
+            ("veo-3.1-fast-first-last", 1),
+        )
+        for model, reference_count in rejected_cases:
+            with self.subTest(model=model, rejected_reference_count=reference_count):
+                with self.assertRaises(yingce_adapter.VideoParameterError):
+                    yingce_adapter._resolve_video_model(
+                        model,
+                        "16:9",
+                        8,
+                        reference_count,
+                    )
+
+    def test_video_legacy_internal_ids_disambiguate_only_by_reference_count(self):
+        legacy_cases = (
+            ("omni", 0, "omni", "omni-flash"),
+            ("omni", 1, "omni", "omni-flash-references"),
+            ("omni", 3, "omni", "omni-flash-references"),
+            (
+                "veo_3_1_i2v_s_fast_landscape_8s_fl",
+                1,
+                "veo_3_1_i2v_s_fast_landscape_8s_fl",
+                "veo-3.1-fast-first-frame",
+            ),
+            (
+                "veo_3_1_i2v_s_fast_landscape_8s_fl",
+                2,
+                "veo_3_1_i2v_s_fast_landscape_8s_fl",
+                "veo-3.1-fast-first-last",
+            ),
+            (
+                "veo_3_1_i2v_s_landscape_8s",
+                1,
+                "veo_3_1_i2v_s_landscape_8s",
+                "veo-3.1-quality-first-frame",
+            ),
+            (
+                "veo_3_1_i2v_s_landscape_8s",
+                2,
+                "veo_3_1_i2v_s_landscape_8s",
+                "veo-3.1-quality-first-last",
+            ),
+        )
+        for model, reference_count, expected_model, expected_capability in legacy_cases:
+            with self.subTest(model=model, reference_count=reference_count):
+                resolved_model, duration, capability = yingce_adapter._resolve_video_model(
+                    model,
+                    None,
+                    None,
+                    reference_count,
+                )
+                self.assertEqual(expected_model, resolved_model)
+                self.assertEqual(8, duration)
+                self.assertEqual(expected_capability, capability["capability_id"])
+
     async def test_all_yingce_routes_reuse_existing_api_key_auth(self):
         requests = (
             ("POST", "/v1/images/generations", {"json": {"model": "gemini-3.1-flash-image", "prompt": "synthetic"}}),
@@ -362,66 +462,320 @@ class YingceAdapterAuthContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("mask_not_supported", response.json()["error"]["code"])
         self.assertEqual([], calls)
 
-    async def test_video_resolution_name_maps_only_to_existing_callable_model(self):
+    async def test_video_720p_native_and_blank_keep_the_catalog_model_without_upsample(self):
         completion = json.dumps(
             {
                 "error": {
-                    "message": "synthetic resolution fixture",
+                    "message": "synthetic native resolution fixture",
                     "code": "upstream_error",
                     "status_code": 502,
                 }
             }
         )
-        calls = self._capture_generation([completion])
+        calls = []
 
-        response = await self.client.post(
-            "/v1/videos",
-            headers=self._auth_headers(),
-            data={
-                "model": "veo-3.1-quality",
-                "prompt": "synthetic resolution prompt",
-                "seconds": "8",
-                "size": "1792x1024",
-                "resolution_name": "1080p",
-                "preset": "synthetic-compatible-preset",
-            },
-        )
+        async def fake_handle_generation(**kwargs):
+            calls.append(kwargs)
+            yield completion
 
-        self.assertEqual(200, response.status_code)
-        await asyncio.sleep(0)
-        self.assertEqual(1, len(calls))
-        self.assertEqual(
-            "veo_3_1_t2v_landscape_8s_1080p",
-            calls[0]["model"],
-        )
+        with patch.object(generation_handler, "handle_generation", fake_handle_generation):
+            for resolution_name in (None, "", "native", "720P", "720p"):
+                with self.subTest(resolution_name=resolution_name):
+                    data = {
+                        "model": "veo-3.1-quality",
+                        "prompt": "synthetic native resolution prompt",
+                        "seconds": "8",
+                        "size": "1792x1024",
+                    }
+                    if resolution_name is not None:
+                        data["resolution_name"] = resolution_name
+                    response = await self.client.post(
+                        "/v1/videos",
+                        headers=self._auth_headers(),
+                        data=data,
+                    )
+                    self.assertEqual(200, response.status_code)
+                    await self._poll_video_terminal(response.json()["id"])
+                    self.assertEqual(
+                        "veo_3_1_t2v_landscape_8s",
+                        calls[-1]["model"],
+                    )
 
-        calls.clear()
-        unsupported = await self.client.post(
-            "/v1/videos",
-            headers=self._auth_headers(),
-            data={
-                "model": "omni",
-                "prompt": "synthetic unsupported resolution prompt",
-                "seconds": "10",
-                "resolution_name": "1080p",
-            },
+        self.assertEqual(5, len(calls))
+
+    async def test_video_nativep_alias_keeps_veo_lite_native_model(self):
+        completion = json.dumps(
+            {"error": {"code": "upstream_error", "status_code": 502}}
         )
-        self.assertEqual(400, unsupported.status_code)
-        self.assertEqual(
-            "unsupported_resolution", unsupported.json()["error"]["code"]
+        calls = []
+
+        async def fake_handle_generation(**kwargs):
+            calls.append(kwargs)
+            yield completion
+
+        with patch.object(generation_handler, "handle_generation", fake_handle_generation):
+            for resolution_name in ("nativeP", "nativep"):
+                with self.subTest(resolution_name=resolution_name):
+                    response = await self.client.post(
+                        "/v1/videos",
+                        headers=self._auth_headers(),
+                        data={
+                            "model": "veo-3.1-lite",
+                            "prompt": "synthetic native alias prompt",
+                            "seconds": "8",
+                            "size": "16:9",
+                            "resolution_name": resolution_name,
+                        },
+                    )
+                    self.assertEqual(200, response.status_code)
+                    await self._poll_video_terminal(response.json()["id"])
+                    self.assertEqual(
+                        "veo_3_1_t2v_lite_landscape_8s",
+                        calls[-1]["model"],
+                    )
+
+        self.assertEqual(2, len(calls))
+
+    async def test_video_jutian_pixel_sizes_map_to_catalog_aspect_ratios(self):
+        completion = json.dumps(
+            {"error": {"code": "upstream_error", "status_code": 502}}
         )
+        calls = []
+
+        async def fake_handle_generation(**kwargs):
+            calls.append(kwargs)
+            yield completion
+
+        cases = (
+            ("1280x720", "veo_3_1_t2v_fast_landscape_8s"),
+            ("720x1280", "veo_3_1_t2v_fast_portrait_8s"),
+        )
+        with patch.object(generation_handler, "handle_generation", fake_handle_generation):
+            for size, expected_model in cases:
+                with self.subTest(size=size):
+                    response = await self.client.post(
+                        "/v1/videos",
+                        headers=self._auth_headers(),
+                        data={
+                            "model": "veo-3.1-fast",
+                            "prompt": "synthetic Jutian pixel size prompt",
+                            "seconds": "8",
+                            "size": size,
+                            "resolution_name": "native",
+                        },
+                    )
+                    self.assertEqual(200, response.status_code)
+                    await self._poll_video_terminal(response.json()["id"])
+                    self.assertEqual(expected_model, calls[-1]["model"])
+
+        self.assertEqual(2, len(calls))
+
+    async def test_video_public_text_modes_map_to_exact_existing_models(self):
+        completion = json.dumps(
+            {"error": {"code": "upstream_error", "status_code": 502}}
+        )
+        calls = []
+
+        async def fake_handle_generation(**kwargs):
+            calls.append(kwargs)
+            yield completion
+
+        cases = (
+            ("omni-flash", 8, "16:9", "omni"),
+            ("omni-flash", 10, "9:16", "omni_portrait_10s"),
+            ("veo-3.1-lite", 8, "16:9", "veo_3_1_t2v_lite_landscape_8s"),
+            ("veo-3.1-fast", 8, "9:16", "veo_3_1_t2v_fast_portrait_8s"),
+            ("veo-3.1-quality", 8, "16:9", "veo_3_1_t2v_landscape_8s"),
+        )
+        with patch.object(generation_handler, "handle_generation", fake_handle_generation):
+            for model, seconds, size, expected_model in cases:
+                with self.subTest(model=model, seconds=seconds, size=size):
+                    response = await self.client.post(
+                        "/v1/videos",
+                        headers=self._auth_headers(),
+                        data={
+                            "model": model,
+                            "prompt": "synthetic text video prompt",
+                            "seconds": str(seconds),
+                            "size": size,
+                            "resolution_name": "720P",
+                        },
+                    )
+                    self.assertEqual(200, response.status_code)
+                    await self._poll_video_terminal(response.json()["id"])
+                    self.assertEqual(expected_model, calls[-1]["model"])
+                    self.assertIsNone(calls[-1]["images"])
+
+    async def test_video_public_image_modes_map_to_exact_existing_models(self):
+        completion = json.dumps(
+            {"error": {"code": "upstream_error", "status_code": 502}}
+        )
+        calls = []
+
+        async def fake_handle_generation(**kwargs):
+            calls.append(kwargs)
+            yield completion
+
+        cases = (
+            ("omni-flash-references", 1, "16:9", "omni"),
+            ("omni-flash-references", 3, "9:16", "omni_portrait"),
+            ("veo-3.1-lite-first-frame", 1, "16:9", "veo_3_1_i2v_lite_landscape_8s"),
+            ("veo-3.1-lite-first-last", 2, "9:16", "veo_3_1_interpolation_lite_portrait_8s"),
+            ("veo-3.1-fast-first-frame", 1, "16:9", "veo_3_1_i2v_s_fast_landscape_8s_fl"),
+            ("veo-3.1-fast-first-last", 2, "9:16", "veo_3_1_i2v_s_fast_portrait_8s_fl"),
+            ("veo-3.1-fast-references", 1, "16:9", "veo_3_1_r2v_fast_landscape"),
+            ("veo-3.1-fast-references", 3, "9:16", "veo_3_1_r2v_fast_portrait"),
+            ("veo-3.1-quality-first-frame", 1, "16:9", "veo_3_1_i2v_s_landscape_8s"),
+            ("veo-3.1-quality-first-last", 2, "9:16", "veo_3_1_i2v_s_portrait_8s"),
+        )
+        with patch.object(generation_handler, "handle_generation", fake_handle_generation):
+            for model, image_count, size, expected_model in cases:
+                with self.subTest(model=model, image_count=image_count, size=size):
+                    response = await self.client.post(
+                        "/v1/videos",
+                        headers=self._auth_headers(),
+                        data={
+                            "model": model,
+                            "prompt": "synthetic image video prompt",
+                            "seconds": "8",
+                            "size": size,
+                            "resolution_name": "720P",
+                        },
+                        files=self._video_reference_files(image_count),
+                    )
+                    self.assertEqual(200, response.status_code)
+                    await self._poll_video_terminal(response.json()["id"])
+                    self.assertEqual(expected_model, calls[-1]["model"])
+                    self.assertEqual(image_count, len(calls[-1]["images"]))
+
+    async def test_video_explicit_modes_reject_wrong_image_counts_before_task_creation(self):
+        calls = self._capture_generation([])
+        cases = (
+            ("omni-flash", 1, 8),
+            ("omni-flash-references", 0, 8),
+            ("omni-flash-references", 4, 8),
+            ("omni-flash-references", 1, 10),
+            ("veo-3.1-lite-first-frame", 0, 8),
+            ("veo-3.1-lite-first-frame", 2, 8),
+            ("veo-3.1-lite-first-last", 1, 8),
+            ("veo-3.1-lite-first-last", 3, 8),
+            ("veo-3.1-fast-first-frame", 0, 8),
+            ("veo-3.1-fast-first-frame", 2, 8),
+            ("veo-3.1-fast-first-last", 1, 8),
+            ("veo-3.1-fast-first-last", 3, 8),
+            ("veo-3.1-fast-references", 0, 8),
+            ("veo-3.1-fast-references", 4, 8),
+            ("veo-3.1-quality-first-frame", 0, 8),
+            ("veo-3.1-quality-first-frame", 2, 8),
+            ("veo-3.1-quality-first-last", 1, 8),
+            ("veo-3.1-quality-first-last", 3, 8),
+        )
+        for model, image_count, seconds in cases:
+            with self.subTest(model=model, image_count=image_count, seconds=seconds):
+                task_count = len(yingce_adapter.video_tasks._tasks)
+                response = await self.client.post(
+                    "/v1/videos",
+                    headers=self._auth_headers(),
+                    data={
+                        "model": model,
+                        "prompt": "synthetic private prompt marker",
+                        "seconds": str(seconds),
+                        "size": "16:9",
+                        "resolution_name": "720P",
+                    },
+                    files=self._video_reference_files(image_count) or None,
+                )
+                self.assertEqual(400, response.status_code)
+                payload = response.json()
+                self.assertEqual("unsupported_video_parameters", payload["error"]["code"])
+                self.assertIn("allowed", payload["error"])
+                self.assertEqual(task_count, len(yingce_adapter.video_tasks._tasks))
+                self.assertNotIn("synthetic private prompt marker", response.text)
+                self.assertNotIn("synthetic-reference", response.text)
         self.assertEqual([], calls)
 
-    async def test_video_public_t2v_reference_fails_closed_without_submission(self):
+    async def test_video_unverified_resolutions_fail_closed_without_upsample_or_task(self):
         calls = self._capture_generation([])
+        cases = (
+            ("omni-flash", "1080P"),
+            ("veo-3.1-lite", "1080p"),
+            ("veo-3.1-fast", "4K"),
+            ("veo-3.1-quality", "2160P"),
+            ("veo-3.1-quality", "480P"),
+        )
+        for model, resolution_name in cases:
+            with self.subTest(model=model, resolution_name=resolution_name):
+                task_count = len(yingce_adapter.video_tasks._tasks)
+                response = await self.client.post(
+                    "/v1/videos",
+                    headers=self._auth_headers(),
+                    data={
+                        "model": model,
+                        "prompt": "synthetic resolution rejection prompt",
+                        "seconds": "8",
+                        "size": "16:9",
+                        "resolution_name": resolution_name,
+                    },
+                )
+                self.assertEqual(400, response.status_code)
+                self.assertEqual(
+                    "unsupported_video_parameters",
+                    response.json()["error"]["code"],
+                )
+                self.assertEqual(task_count, len(yingce_adapter.video_tasks._tasks))
+        self.assertEqual([], calls)
+
+    async def test_video_invalid_aspect_and_duration_return_safe_allowed_metadata(self):
+        calls = self._capture_generation([])
+        cases = (
+            {"model": "veo-3.1-fast", "seconds": "6", "size": "16:9"},
+            {"model": "veo-3.1-fast", "seconds": "8", "size": "1024x1024"},
+        )
+        for request_data in cases:
+            with self.subTest(request_data=request_data):
+                task_count = len(yingce_adapter.video_tasks._tasks)
+                response = await self.client.post(
+                    "/v1/videos",
+                    headers=self._auth_headers(),
+                    data={
+                        **request_data,
+                        "prompt": "synthetic safe error prompt marker",
+                        "resolution_name": "720P",
+                    },
+                )
+                self.assertEqual(400, response.status_code)
+                error = response.json()["error"]
+                self.assertEqual("unsupported_video_parameters", error["code"])
+                self.assertEqual("veo-3.1-fast", error["allowed"]["capability_id"])
+                self.assertEqual(["16:9", "9:16"], error["allowed"]["aspect_ratio"])
+                self.assertEqual([8], error["allowed"]["duration_seconds"])
+                self.assertEqual(
+                    ["native", "nativeP", "720P"],
+                    error["allowed"]["resolution"],
+                )
+                self.assertEqual({"min": 0, "max": 0}, error["allowed"]["images"])
+                self.assertNotIn("synthetic safe error prompt marker", response.text)
+                self.assertEqual(task_count, len(yingce_adapter.video_tasks._tasks))
+        self.assertEqual([], calls)
+
+    async def test_video_quality_references_alias_is_not_publicly_resolvable(self):
+        calls = self._capture_generation([])
+        task_count = len(yingce_adapter.video_tasks._tasks)
         response = await self.client.post(
             "/v1/videos",
             headers=self._auth_headers(),
-            data={"model": "omni", "prompt": "synthetic reference video prompt", "seconds": "10"},
-            files={"input_reference[]": ("reference.png", b"synthetic-reference-image", "image/png")},
+            data={
+                "model": "veo-3.1-quality-references",
+                "prompt": "synthetic quality refs prompt",
+                "seconds": "8",
+                "size": "16:9",
+                "resolution_name": "720P",
+            },
+            files=self._video_reference_files(1),
         )
         self.assertEqual(400, response.status_code)
-        self.assertEqual("reference_not_supported", response.json()["error"]["code"])
+        self.assertEqual("unsupported_model", response.json()["error"]["code"])
+        self.assertEqual(task_count, len(yingce_adapter.video_tasks._tasks))
         self.assertEqual([], calls)
 
     def test_video_marker_parser_accepts_generation_handler_completion_format(self):
@@ -1178,13 +1532,13 @@ class YingceAdapterAuthContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("synthetic private prompt", serialized)
         self.assertNotIn("yingce-synthetic-api-key", serialized)
 
-    async def test_existing_models_catalog_remains_unchanged(self):
+    async def test_existing_base_capability_ids_remain_discoverable(self):
         response = await self.client.get(
             "/v1/models", headers=self._auth_headers()
         )
         self.assertEqual(200, response.status_code)
         data = response.json()["data"]
-        self.assertEqual(
+        self.assertTrue(
             {
                 "nano-banana-2",
                 "nano-banana-pro",
@@ -1192,8 +1546,7 @@ class YingceAdapterAuthContractTests(unittest.IsolatedAsyncioTestCase):
                 "veo-3.1-lite",
                 "veo-3.1-fast",
                 "veo-3.1-quality",
-            },
-            {item["capability_id"] for item in data},
+            }.issubset({item["capability_id"] for item in data})
         )
 
     async def test_existing_chat_completions_contract_still_uses_generation_handler(self):

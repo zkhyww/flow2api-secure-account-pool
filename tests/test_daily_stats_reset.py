@@ -80,6 +80,28 @@ class DailyStatsResetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(token_row["today_video_count"], 1)
         self.assertEqual(token_row["today_error_count"], 0)
 
+    async def test_dashboard_separates_enabled_accounts_from_generation_ready_accounts(self):
+        second_id = await self.db.add_token(
+            Token(
+                st="st-second",
+                at="at-second",
+                email="second@example.com",
+                name="second",
+            )
+        )
+        await self.db.update_token_auth_state(
+            second_id,
+            state="reauth_required",
+            failure_count=3,
+            next_retry_at=None,
+            error_class="interactive_verification",
+        )
+
+        stats = await self.db.get_dashboard_stats()
+
+        self.assertEqual(2, stats["active_tokens"])
+        self.assertEqual(1, stats["ready_tokens"])
+
 
 if __name__ == "__main__":
     unittest.main()

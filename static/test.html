@@ -205,7 +205,8 @@ h1 { text-align: center; margin-bottom: 8px; font-size: 24px; color: #7c8aff; }
       <div class="gen-panel">
         <h3 id="selectedModelName">请选择模型</h3>
         <div class="model-info" id="selectedModelInfo">比例、清晰度与时长是参数，提交时由页面解析为兼容模型 ID。</div>
-        <div class="model-info" id="videoDurationNote" style="display:none;">Omni Flash 可选 8 秒或 10 秒；Veo 3.1 保持 8 秒。</div>
+        <div class="model-info" id="videoDurationNote" style="display:none;">原生清晰度（外部客户端请选择 720P）</div>
+        <div class="model-info" id="videoCapabilityGuide" style="display:none;"></div>
 
         <div class="form-group">
           <label for="promptInput">提示词 (Prompt)</label>
@@ -243,6 +244,8 @@ const {
   listVisibleCapabilities,
   listVisibleOptions,
   selectPreferredOptionValue,
+  getCapabilityUsageMeta,
+  validateCapabilityImageCount,
   listHiddenDiagnosticMappings,
   resolveCapabilityModelId,
   resolveExtendModelId
@@ -768,12 +771,20 @@ function updateResolvedModel() {
   const tierNote = mapping && mapping.validation_status === "membership_required"
     ? " 此组合需要高级会员。"
     : "";
+  const usage = getCapabilityUsageMeta(capability);
   document.getElementById("selectedModelName").textContent = String(capability.display_name || "请选择模型");
   document.getElementById("selectedModelInfo").textContent = STATE.selectedModel
-    ? `${STATE.mediaMode === "image" ? "图片" : "视频"} · ${parameters.aspect_ratio}${STATE.mediaMode === "image" ? ` · ${parameters.resolution}` : ` · ${parameters.duration_seconds} 秒`}`
+    ? STATE.mediaMode === "image"
+      ? `图片 · ${parameters.aspect_ratio} · ${parameters.resolution}`
+      : `${usage.generationModeLabel} · ${parameters.aspect_ratio} · ${parameters.duration_seconds} 秒 · ${usage.imageSemantics}`
     : "当前参数组合未开放。";
   document.getElementById("modelUsage").textContent =
-    `${String(capability.description || "")}${tierNote}`;
+    `${usage.usageGuide || String(capability.description || "")}${tierNote}`;
+  const videoGuide = document.getElementById("videoCapabilityGuide");
+  videoGuide.style.display = STATE.mediaMode === "video" ? "block" : "none";
+  videoGuide.textContent = STATE.mediaMode === "video"
+    ? `${usage.generationModeLabel} · ${usage.imageSemantics} · ${usage.nativeResolutionNote}`
+    : "";
 
   const availability = getAvailabilityMeta(STATE.selectedModel);
   const availabilityNode = document.getElementById("modelAvailability");
@@ -786,7 +797,9 @@ function updateResolvedModel() {
     uploadGroup.style.display = "block";
     const limitText = meta.type === "image"
       ? "可选，用于参考图编辑"
-      : `${meta.minImages}-${meta.maxImages} 张参考图`;
+      : usage.requiresImages
+        ? `必需：${usage.imageSemantics}`
+        : `可选：${usage.imageSemantics}`;
     document.getElementById("imageLimit").textContent = `(${limitText})`;
   } else {
     uploadGroup.style.display = "none";
@@ -831,12 +844,29 @@ function useLastVideoForExtend() {
 function refreshGenerateButton() {
   const btn = document.getElementById("btnGenerate");
   const meta = STATE.modelConfig;
-  const eligible = canGenerateSelectedModel(meta, STATE.extendSourceMediaId);
+  const capability = getSelectedCapability();
+  const imageValidation = meta && !meta.requires_video_id
+    ? validateCapabilityImageCount(capability, STATE.images.length)
+    : { valid: true, message: "" };
+  const eligible = canGenerateSelectedModel(meta, STATE.extendSourceMediaId)
+    && imageValidation.valid;
   btn.disabled = STATE.generating || !eligible;
+
+  const videoGuide = document.getElementById("videoCapabilityGuide");
+  if (videoGuide && meta && meta.type === "video" && capability) {
+    const usage = getCapabilityUsageMeta(capability);
+    videoGuide.style.display = "block";
+    videoGuide.textContent = imageValidation.valid
+      ? `${usage.generationModeLabel} · ${usage.imageSemantics} · ${usage.nativeResolutionNote}`
+      : `${usage.generationModeLabel} · ${imageValidation.message} · ${usage.nativeResolutionNote}`;
+  }
+
   if (STATE.generating) {
     btn.textContent = "⏳ 生成中...";
   } else if (meta && meta.requires_video_id && !eligible) {
     btn.textContent = "需要先选择一个已生成视频";
+  } else if (meta && !imageValidation.valid) {
+    btn.textContent = imageValidation.message;
   } else if (meta) {
     btn.textContent = meta.type === "image" ? "🎨 生成图片" : "🎬 生成视频";
   } else {
@@ -890,6 +920,7 @@ function renderImagePreviews() {
     item.innerHTML = `<img src="${dataUrl}" alt="preview"><button class="remove-btn" onclick="removeImage(${idx})">×</button>`;
     list.appendChild(item);
   });
+  refreshGenerateButton();
 }
 
 function removeImage(idx) {

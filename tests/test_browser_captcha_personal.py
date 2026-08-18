@@ -1,8 +1,10 @@
 import itertools
 import json
+import tempfile
 import types
 import unittest
-from unittest.mock import AsyncMock
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from src.services.browser_captcha_personal import (
     BrowserCaptchaService,
@@ -89,6 +91,154 @@ class BrowserCaptchaPersonalTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(service.headless)
         self.assertNotIn("--incognito", args)
         self.assertNotIn("--bwsi", args)
+
+    def test_persistent_account_profile_is_reused_without_incognito(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_dir = Path(temp_dir) / "profile"
+            profile_dir.mkdir()
+
+            first = BrowserCaptchaService(persistent_profile_dir=profile_dir)
+            second = BrowserCaptchaService(persistent_profile_dir=profile_dir)
+            args = _build_personal_browser_args(
+                headless=first.headless,
+                incognito_enabled=first.runtime_incognito_enabled,
+                restore_last_session=first._persistent_profile_dir is not None,
+            )
+
+            self.assertEqual(profile_dir.resolve(), Path(first.user_data_dir).resolve())
+            self.assertEqual(Path(first.user_data_dir).resolve(), Path(second.user_data_dir).resolve())
+            self.assertFalse(first.runtime_incognito_enabled)
+            self.assertNotIn("--incognito", args)
+            self.assertIn("--restore-last-session", args)
+            self.assertEqual(set(), first._managed_runtime_profile_dirs)
+            self.assertEqual("<persistent-profile>", first._profile_log_label(first.user_data_dir))
+            self.assertFalse(first._can_retry_with_fresh_profile())
+            self.assertTrue(BrowserCaptchaService()._can_retry_with_fresh_profile())
+
+    def test_temporary_worker_never_restores_a_previous_browser_session(self):
+        service = BrowserCaptchaService()
+        args = _build_personal_browser_args(
+            headless=service.headless,
+            incognito_enabled=service.runtime_incognito_enabled,
+            restore_last_session=service._persistent_profile_dir is not None,
+        )
+
+        self.assertNotIn("--restore-last-session", args)
+
+    async def test_persistent_account_profile_survives_shutdown_cleanup(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_dir = Path(temp_dir) / "profile"
+            profile_dir.mkdir()
+            marker = profile_dir / "marker.txt"
+            marker.write_text("synthetic", encoding="utf-8")
+            service = BrowserCaptchaService(persistent_profile_dir=profile_dir)
+
+            await service.close()
+
+            self.assertTrue(marker.exists())
+            self.assertEqual(profile_dir.resolve(), Path(service.user_data_dir).resolve())
+            self.assertEqual(set(), service._managed_runtime_profile_dirs)
+
+    async def test_persistent_profile_requests_a_graceful_browser_close_before_process_cleanup(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_dir = Path(temp_dir) / "profile"
+            profile_dir.mkdir()
+            service = BrowserCaptchaService(persistent_profile_dir=profile_dir)
+            browser = types.SimpleNamespace(send=AsyncMock(return_value=None))
+
+            requested = await service._request_persistent_profile_flush(
+                browser,
+                reason="test",
+            )
+
+            self.assertTrue(requested)
+            browser.send.assert_awaited_once()
+
+    async def test_temporary_profile_does_not_request_persistent_session_flush(self):
+        service = BrowserCaptchaService()
+        browser = types.SimpleNamespace(send=AsyncMock(return_value=None))
+
+        requested = await service._request_persistent_profile_flush(
+            browser,
+            reason="test",
+        )
+
+        self.assertFalse(requested)
+        browser.send.assert_not_awaited()
+
+    async def test_persistent_account_profile_is_never_replaced_by_runtime_purge(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_dir = Path(temp_dir) / "profile"
+            profile_dir.mkdir()
+            marker = profile_dir / "marker.txt"
+            marker.write_text("synthetic", encoding="utf-8")
+            service = BrowserCaptchaService(persistent_profile_dir=profile_dir)
+
+            await service._purge_runtime_profile_dirs("synthetic_test")
+
+            self.assertTrue(marker.exists())
+            self.assertEqual(profile_dir.resolve(), Path(service.user_data_dir).resolve())
+            self.assertEqual(set(), service._managed_runtime_profile_dirs)
+
+    async def test_persistent_profile_path_is_redacted_from_reload_logs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_dir = Path(temp_dir) / "profile"
+            profile_dir.mkdir()
+            service = BrowserCaptchaService(persistent_profile_dir=profile_dir)
+            service._build_proxy_config_signature = AsyncMock(
+                return_value=service._proxy_config_signature
+            )
+
+            with patch(
+                "src.services.browser_captcha_personal.debug_logger.log_info"
+            ) as info_log:
+                await service.reload_config()
+
+            self.assertNotIn(str(profile_dir.resolve()), str(info_log.call_args_list))
+            self.assertIn("<persistent-profile>", str(info_log.call_args_list))
+
+    async def test_session_refresh_does_not_log_raw_exception_text(self):
+        sentinel = "SENSITIVE_REFRESH_URL_AND_RESPONSE_BODY"
+        resident = ResidentTabInfo(
+            tab=object(),
+            slot_id="slot-1",
+            project_id="project-1",
+        )
+        self.service.initialize = AsyncMock()
+        self.service._resolve_resident_slot_for_project_locked = lambda *_args, **_kwargs: (
+            "slot-1",
+            resident,
+        )
+        self.service._ensure_resident_token_binding = AsyncMock(return_value=True)
+        self.service._tab_reload = AsyncMock(side_effect=RuntimeError(sentinel))
+        self.service._rebuild_resident_tab = AsyncMock(return_value=(None, None))
+
+        with patch(
+            "src.services.browser_captcha_personal.debug_logger.log_error"
+        ) as error_log:
+            result = await self.service.refresh_session_token("project-1", token_id=1)
+
+        self.assertIsNone(result)
+        self.assertNotIn(sentinel, str(error_log.call_args_list))
+
+    async def test_pool_session_refresh_does_not_log_raw_exception_text(self):
+        sentinel = "SENSITIVE_POOL_REFRESH_URL_AND_RESPONSE_BODY"
+        worker = types.SimpleNamespace(
+            refresh_session_token=AsyncMock(side_effect=RuntimeError(sentinel))
+        )
+        pool = _PersonalBrowserPoolService()
+        pool._workers = [worker]
+        pool._ensure_workers = AsyncMock()
+        pool._acquire_worker = AsyncMock(return_value=(0, worker))
+        pool._release_worker_reservation = AsyncMock()
+
+        with patch(
+            "src.services.browser_captcha_personal.debug_logger.log_warning"
+        ) as warning_log:
+            result = await pool.refresh_session_token("project-1", token_id=1)
+
+        self.assertIsNone(result)
+        self.assertNotIn(sentinel, str(warning_log.call_args_list))
 
     @staticmethod
     def _make_remote_object_result(token: str):

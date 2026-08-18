@@ -1,4 +1,5 @@
 import asyncio
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ from fastapi import FastAPI
 
 from src.api import admin
 from src.services.account_onboarding import AccountOnboardingService
+from src.services.account_profile_store import AccountProfileStore
 
 
 PUBLIC_FIELDS = {
@@ -147,6 +149,28 @@ class AccountOnboardingServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(PUBLIC_FIELDS, set(state.to_public_dict()))
         await service.finish(state.session_id, "failed")
 
+    async def test_unexpected_onboarding_error_uses_stable_public_error_class(self):
+        sentinel = "SENSITIVE_ONBOARDING_URL_AND_RESPONSE_BODY"
+
+        async def launch(_session_id):
+            raise RuntimeError(sentinel)
+
+        service = AccountOnboardingService(
+            account_counter=lambda: asyncio.sleep(0, result=0),
+            browser_launcher=launch,
+            ttl_seconds=30,
+        )
+        with patch(
+            "src.services.account_onboarding.debug_logger.log_warning"
+        ) as warning_log:
+            state = await service.start()
+            current = await _wait_for_terminal(service, state.session_id)
+
+        self.assertEqual("failed", current.status)
+        self.assertEqual("failed", current.error_class)
+        self.assertNotIn(sentinel, str(warning_log.call_args_list))
+        self.assertNotIn("RuntimeError", str(warning_log.call_args_list))
+
 
 class AccountOnboardingApiAndPageTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -209,7 +233,77 @@ class AccountOnboardingApiAndPageTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("高级：手动添加 Token", toolbar)
 
-    async def test_real_admin_launcher_uses_native_capture_without_extension_or_pairing(self):
+    async def _assert_failed_launcher_removes_profile(
+        self,
+        *,
+        capture_error=None,
+        persist_error=None,
+    ):
+        original_token_manager = admin.token_manager
+        original_service = admin.account_onboarding_service
+        captured = {}
+
+        class FakeBrowser:
+            def __init__(self, *_args, **kwargs):
+                captured["profile_dir"] = kwargs["persistent_profile_dir"]
+                if capture_error is not None:
+                    self.capture_account_onboarding_result = AsyncMock(
+                        side_effect=capture_error,
+                    )
+                else:
+                    self.capture_account_onboarding_result = AsyncMock(
+                        return_value={
+                            "st": "opaque-session-native",
+                            "google_cookies": "SID=opaque-cookie-native",
+                        },
+                    )
+                self.close = AsyncMock()
+                captured["instance"] = self
+
+        admin.token_manager = SimpleNamespace(
+            get_all_tokens=AsyncMock(return_value=[]),
+        )
+        admin.account_onboarding_service = None
+        persist = AsyncMock(side_effect=persist_error)
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                store = AccountProfileStore(Path(temp_dir))
+                with patch(
+                    "src.services.browser_captcha_personal.BrowserCaptchaService",
+                    new=FakeBrowser,
+                ), patch.object(
+                    admin,
+                    "_get_account_profile_store",
+                    return_value=store,
+                    create=True,
+                ), patch.object(
+                    admin,
+                    "_persist_native_onboarding_result",
+                    new=persist,
+                    create=True,
+                ):
+                    service = await admin._get_account_onboarding_service()
+                    state = await service.start()
+                    current = await _wait_for_terminal(service, state.session_id)
+
+                self.assertEqual("failed", current.status)
+                captured["instance"].close.assert_awaited_once()
+                self.assertFalse(captured["profile_dir"].exists())
+        finally:
+            admin.token_manager = original_token_manager
+            admin.account_onboarding_service = original_service
+
+    async def test_launcher_capture_failure_removes_unpersisted_profile(self):
+        await self._assert_failed_launcher_removes_profile(
+            capture_error=RuntimeError("synthetic capture failure"),
+        )
+
+    async def test_launcher_persist_failure_removes_unpersisted_profile(self):
+        await self._assert_failed_launcher_removes_profile(
+            persist_error=RuntimeError("synthetic persist failure"),
+        )
+
+    async def test_real_admin_launcher_allocates_persistent_profile_and_closes_browser(self):
         original_token_manager = admin.token_manager
         original_service = admin.account_onboarding_service
         captured = {}
@@ -233,34 +327,48 @@ class AccountOnboardingApiAndPageTests(unittest.IsolatedAsyncioTestCase):
         admin.account_onboarding_service = None
         persist = AsyncMock(return_value="success")
         try:
-            with patch(
-                "src.services.browser_captcha_personal.BrowserCaptchaService",
-                new=FakeBrowser,
-            ), patch.object(
-                admin,
-                "_persist_native_onboarding_result",
-                new=persist,
-                create=True,
-            ), patch(
-                "shutil.copytree",
-                side_effect=AssertionError("extension copy is forbidden"),
-            ), patch(
-                "src.services.extension_pairing.get_extension_pairing_service",
-                side_effect=AssertionError("pairing service is forbidden"),
-            ):
-                service = await admin._get_account_onboarding_service()
-                state = await service.start()
-                current = await _wait_for_terminal(service, state.session_id)
+            with tempfile.TemporaryDirectory() as temp_dir:
+                store = AccountProfileStore(Path(temp_dir))
+                with patch(
+                    "src.services.browser_captcha_personal.BrowserCaptchaService",
+                    new=FakeBrowser,
+                ), patch.object(
+                    admin,
+                    "_get_account_profile_store",
+                    return_value=store,
+                    create=True,
+                ), patch.object(
+                    admin,
+                    "_persist_native_onboarding_result",
+                    new=persist,
+                    create=True,
+                ), patch(
+                    "shutil.copytree",
+                    side_effect=AssertionError("extension copy is forbidden"),
+                ), patch(
+                    "src.services.extension_pairing.get_extension_pairing_service",
+                    side_effect=AssertionError("pairing service is forbidden"),
+                ):
+                    service = await admin._get_account_onboarding_service()
+                    state = await service.start()
+                    current = await _wait_for_terminal(service, state.session_id)
 
-            self.assertEqual("success", current.status)
-            self.assertNotIn(
-                "extension_directory",
-                captured["constructor_kwargs"],
-            )
-            self.assertTrue(captured["constructor_kwargs"]["force_headed"])
-            captured["instance"].capture_account_onboarding_result.assert_awaited_once()
-            persist.assert_awaited_once_with(private_result)
-            captured["instance"].close.assert_awaited_once()
+                profile_key = persist.await_args.kwargs["account_profile_key"]
+                profile_dir = store.resolve(profile_key)
+                self.assertEqual("success", current.status)
+                self.assertNotIn(
+                    "extension_directory",
+                    captured["constructor_kwargs"],
+                )
+                self.assertTrue(captured["constructor_kwargs"]["force_headed"])
+                self.assertEqual(profile_dir, captured["constructor_kwargs"]["persistent_profile_dir"])
+                captured["instance"].capture_account_onboarding_result.assert_awaited_once()
+                persist.assert_awaited_once_with(
+                    private_result,
+                    account_profile_key=profile_key,
+                )
+                captured["instance"].close.assert_awaited_once()
+                self.assertTrue(profile_dir.is_dir())
         finally:
             admin.token_manager = original_token_manager
             admin.account_onboarding_service = original_service

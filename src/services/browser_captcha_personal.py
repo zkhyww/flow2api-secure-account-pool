@@ -6,6 +6,7 @@
 import asyncio
 import base64
 from collections import deque
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 import gc
@@ -36,11 +37,13 @@ from .browser_cookie_utils import (
     extract_session_token_from_cookie_payload,
     merge_browser_cookie_payloads,
     normalize_cookie_storage_text,
+    parse_browser_cookie_payload,
 )
 
 # flow2api 缺少的配置常量和函数，内联定义
 TOKEN_POOL_SIZE_MAX = 500
 PERSONAL_POOL_MAX_TOTAL_RESIDENT_TABS = 50
+PERSONAL_BROWSER_MAX_LIVE_PROCESSES = 10
 
 def resolve_effective_browser_count(value) -> int:
     try:
@@ -67,6 +70,10 @@ PERSONAL_GOOGLE_FAMILY_COOKIE_MIRROR_URLS = (
     "https://www.google.com/",
     "https://www.recaptcha.net/",
 )
+PERSONAL_FLOW_SESSION_COOKIE_NAMES = {
+    "__Secure-next-auth.session-token",
+    "next-auth.session-token",
+}
 # Session cookie cache for computed captcha relay
 # Personal browser writes Google session cookies here after each successful solve.
 _recaptcha_session_cookies: Optional[Dict[str, str]] = None
@@ -641,6 +648,7 @@ def _build_personal_browser_args(
     *,
     headless: bool,
     incognito_enabled: bool = True,
+    restore_last_session: bool = False,
     proxy_server_arg: Optional[str] = None,
     proxy_extension_dir: Optional[str] = None,
     extension_directory: Optional[str] = None,
@@ -683,6 +691,9 @@ def _build_personal_browser_args(
         browser_args.append('--window-position=3000,3000')
     else:
         browser_args.append('--window-position=80,80')
+
+    if restore_last_session:
+        browser_args.append('--restore-last-session')
 
     if proxy_server_arg:
         browser_args.append(proxy_server_arg)
@@ -1549,6 +1560,8 @@ class BrowserCaptchaService:
     _launch_gate: Optional[asyncio.Semaphore] = None
     _launch_gate_loop: Optional[asyncio.AbstractEventLoop] = None
     _launch_gate_limit: int = 0
+    _process_gate: Optional[asyncio.Semaphore] = None
+    _process_gate_loop: Optional[asyncio.AbstractEventLoop] = None
 
     @classmethod
     def _get_global_browser_launch_gate(cls) -> asyncio.Semaphore:
@@ -1564,6 +1577,47 @@ class BrowserCaptchaService:
             cls._launch_gate_limit = limit
         return cls._launch_gate
 
+    @classmethod
+    def _get_global_browser_process_gate(cls) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        if cls._process_gate is None or cls._process_gate_loop is not loop:
+            cls._process_gate = asyncio.Semaphore(PERSONAL_BROWSER_MAX_LIVE_PROCESSES)
+            cls._process_gate_loop = loop
+        return cls._process_gate
+
+    async def _acquire_browser_process_lease(self) -> None:
+        if self._browser_process_lease_held:
+            return
+        process_gate = self._get_global_browser_process_gate()
+        await process_gate.acquire()
+        self._browser_process_lease_gate = process_gate
+        self._browser_process_lease_held = True
+
+    def _release_browser_process_lease(self) -> None:
+        if not self._browser_process_lease_held:
+            return
+        process_gate = self._browser_process_lease_gate
+        self._browser_process_lease_gate = None
+        self._browser_process_lease_held = False
+        if process_gate is not None:
+            process_gate.release()
+
+    @asynccontextmanager
+    async def _browser_process_start_guard(self):
+        await self._acquire_browser_process_lease()
+        try:
+            yield
+        except BaseException:
+            try:
+                await self._shutdown_browser_runtime_locked_inner(
+                    reason="initialize_failed"
+                )
+            except BaseException:
+                pass
+            finally:
+                self._release_browser_process_lease()
+            raise
+
     def __init__(
         self,
         db=None,
@@ -1572,14 +1626,22 @@ class BrowserCaptchaService:
         max_resident_tabs_override: Optional[int] = None,
         extension_directory: Optional[str] = None,
         force_headed: bool = False,
+        persistent_profile_dir: Optional[Path] = None,
     ):
         """初始化服务"""
         self._force_headed = bool(force_headed)
+        self._persistent_profile_dir = (
+            Path(persistent_profile_dir).expanduser().resolve(strict=False)
+            if persistent_profile_dir is not None
+            else None
+        )
         self.headless = False if self._force_headed else bool(getattr(config, "personal_headless", True))
-        self.runtime_incognito_enabled = not self._force_headed
+        self.runtime_incognito_enabled = not self._force_headed and self._persistent_profile_dir is None
         self._runtime_extension_directory = str(extension_directory or "").strip() or None
         self.browser = None
         self._initialized = False
+        self._browser_process_lease_gate: Optional[asyncio.Semaphore] = None
+        self._browser_process_lease_held = False
         self.website_key = "6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV"
         self.db = db
         self._browser_instance_id = 0
@@ -1710,6 +1772,9 @@ class BrowserCaptchaService:
 
     def _resolve_user_data_dir(self, headless: Optional[bool] = None) -> Optional[str]:
         _ = self.headless if headless is None else bool(headless)
+        if self._persistent_profile_dir is not None:
+            return os.path.normpath(str(self._persistent_profile_dir))
+
         existing_runtime_profile = str(getattr(self, "_runtime_ephemeral_user_data_dir", "") or "").strip()
         if existing_runtime_profile:
             return os.path.normpath(existing_runtime_profile)
@@ -1719,6 +1784,14 @@ class BrowserCaptchaService:
             return os.path.normpath(profile_override)
 
         return self._create_fresh_runtime_profile_dir(prefix="browser_profile_")
+
+    def _profile_log_label(self, path_value: Optional[str]) -> str:
+        if self._persistent_profile_dir is not None:
+            return "<persistent-profile>"
+        return "<runtime-profile>" if str(path_value or "").strip() else "<isolated-temp>"
+
+    def _can_retry_with_fresh_profile(self) -> bool:
+        return self._persistent_profile_dir is None
 
     def _default_runtime_profile_dir(self) -> Path:
         return (PERSONAL_RUNTIME_DATA_DIR / "browser_profile").resolve()
@@ -1768,6 +1841,12 @@ class BrowserCaptchaService:
         return targets
 
     async def _purge_runtime_profile_dirs(self, reason: str) -> None:
+        if self._persistent_profile_dir is not None:
+            debug_logger.log_info(
+                f"[BrowserCaptcha] 持久账号 profile 不参与运行时清理 (reason={reason})"
+            )
+            return
+
         current_user_data_dir = str(self.user_data_dir or "").strip()
         cleanup_targets = self._collect_runtime_profile_cleanup_targets()
         if current_user_data_dir and not self._is_runtime_managed_profile_dir(current_user_data_dir):
@@ -1804,6 +1883,12 @@ class BrowserCaptchaService:
         )
 
     async def _cleanup_runtime_profile_dirs_after_shutdown(self, *, reason: str) -> bool:
+        if self._persistent_profile_dir is not None:
+            debug_logger.log_info(
+                f"[BrowserCaptcha] 持久账号 profile 已保留 (reason={reason})"
+            )
+            return False
+
         current_user_data_dir = str(self.user_data_dir or "").strip()
         cleanup_targets = self._collect_runtime_profile_cleanup_targets()
         if current_user_data_dir and not self._is_runtime_managed_profile_dir(current_user_data_dir):
@@ -2060,7 +2145,7 @@ class BrowserCaptchaService:
             f"probe_ttl {old_probe_ttl}s->{self._health_probe_ttl_seconds}s, "
             f"fingerprint_ttl {old_fingerprint_ttl}s->{self._fingerprint_cache_ttl_seconds}s, "
             f"fresh_restart_every {old_fresh_restart_every}->{self._fresh_profile_restart_every_n_solves}, "
-            f"profile {old_user_data_dir or '<isolated-temp>'}->{self.user_data_dir or '<isolated-temp>'}, "
+            f"profile {self._profile_log_label(old_user_data_dir)}->{self._profile_log_label(self.user_data_dir)}, "
             f"runtime_changed={runtime_config_changed}"
         )
         if (
@@ -2613,6 +2698,33 @@ class BrowserCaptchaService:
             ttl_seconds = 600
 
         browser_instance = self.browser
+        stale_process_lease = bool(
+            self._browser_process_lease_held
+            and (
+                not self._initialized
+                or browser_instance is None
+                or getattr(browser_instance, "stopped", False)
+                or getattr(browser_instance, "_flow2api_runtime_disconnected", False)
+            )
+        )
+        if stale_process_lease:
+            async with self._browser_lock:
+                browser_instance = self.browser
+                stale_process_lease = bool(
+                    self._browser_process_lease_held
+                    and (
+                        not self._initialized
+                        or browser_instance is None
+                        or getattr(browser_instance, "stopped", False)
+                        or getattr(browser_instance, "_flow2api_runtime_disconnected", False)
+                    )
+                )
+                if stale_process_lease:
+                    await self._shutdown_browser_runtime_locked(
+                        reason=f"{reason}:stale_process_lease"
+                    )
+                    return True
+
         if not (self._initialized and browser_instance) or getattr(browser_instance, "stopped", False):
             return False
         if self._get_runtime_idle_seconds() < ttl_seconds:
@@ -8508,6 +8620,27 @@ class BrowserCaptchaService:
             )
         return killed_count
 
+    async def _request_persistent_profile_flush(self, browser_instance, *, reason: str) -> bool:
+        """Ask Chrome to close cleanly so session cookies reach the persistent profile."""
+        if self._persistent_profile_dir is None or browser_instance is None:
+            return False
+
+        try:
+            from nodriver import cdp
+
+            await self._run_with_timeout(
+                browser_instance.send(cdp.browser.close()),
+                timeout_seconds=5.0,
+                label=f"browser.graceful_close:{reason}",
+            )
+            await asyncio.sleep(0.3)
+            return True
+        except Exception:
+            debug_logger.log_warning(
+                f"[BrowserCaptcha] persistent profile graceful close did not confirm ({reason})"
+            )
+            return False
+
     async def _stop_browser_process(self, browser_instance, reason: str = "browser_stop"):
         """兼容 nodriver 同步 stop API，安全停止浏览器进程。"""
         if not browser_instance:
@@ -8517,6 +8650,7 @@ class BrowserCaptchaService:
         browser_pid = self._get_browser_process_pid(browser_instance) or self._browser_process_pid
         profile_dirs = self._collect_runtime_profile_process_targets()
         connection = getattr(browser_instance, "connection", None)
+        await self._request_persistent_profile_flush(browser_instance, reason=reason)
         await self._disconnect_browser_connection_quietly(browser_instance, reason=reason)
 
         if connection is not None:
@@ -8611,6 +8745,12 @@ class BrowserCaptchaService:
                 )
 
     async def _shutdown_browser_runtime_locked(self, reason: str):
+        try:
+            await self._shutdown_browser_runtime_locked_inner(reason=reason)
+        finally:
+            self._release_browser_process_lease()
+
+    async def _shutdown_browser_runtime_locked_inner(self, reason: str):
         """在持有 _browser_lock 的前提下，彻底清理当前浏览器运行态。"""
         browser_instance = self.browser
         self.browser = None
@@ -9465,10 +9605,13 @@ class BrowserCaptchaService:
                     "[BrowserCaptcha] 浏览器启动排队中，等待全局启动配额以降低 Windows 启动尖峰内存"
                 )
 
-            async with launch_gate:
+            async with self._browser_process_start_guard(), launch_gate:
                 try:
                     if self.user_data_dir:
-                        debug_logger.log_info(f"[BrowserCaptcha] 正在启动 nodriver 浏览器 (用户数据目录: {self.user_data_dir})...")
+                        debug_logger.log_info(
+                            "[BrowserCaptcha] 正在启动 nodriver 浏览器 "
+                            f"(profile={self._profile_log_label(self.user_data_dir)})..."
+                        )
                         os.makedirs(self.user_data_dir, exist_ok=True)
                     else:
                         debug_logger.log_info(
@@ -9509,6 +9652,7 @@ class BrowserCaptchaService:
                     browser_args = _build_personal_browser_args(
                         headless=self.headless,
                         incognito_enabled=self.runtime_incognito_enabled,
+                        restore_last_session=self._persistent_profile_dir is not None,
                         proxy_server_arg=proxy_server_arg,
                         proxy_extension_dir=self._proxy_ext_dir,
                         extension_directory=self._runtime_extension_directory,
@@ -9551,12 +9695,17 @@ class BrowserCaptchaService:
                     }
                     launch_config = uc.Config(**launch_kwargs)
                     effective_launch_args = launch_config()
+                    effective_args_for_log = (
+                        "<redacted-for-persistent-profile>"
+                        if self._persistent_profile_dir is not None
+                        else " ".join(effective_launch_args)
+                    )
                     debug_logger.log_info(
                         "[BrowserCaptcha] nodriver 启动上下文: "
                         f"docker={IS_DOCKER}, display={display_value or '<empty>'}, "
                         f"uid={effective_uid}, headless={self.headless}, sandbox={sandbox_enabled}, "
                         f"executable={browser_executable_path or '<auto>'}, "
-                        f"args={' '.join(effective_launch_args)}"
+                        f"args={effective_args_for_log}"
                     )
 
                     # 启动 nodriver 浏览器（后台启动，不占用前台）
@@ -9575,7 +9724,7 @@ class BrowserCaptchaService:
                         if retry_reason:
                             debug_logger.log_warning(
                                 f"[BrowserCaptcha] 浏览器启动重试 ({retry_reason}): "
-                                f"label={launch_label}, profile={current_launch_kwargs.get('user_data_dir') or '<isolated-temp>'}"
+                                f"label={launch_label}, profile={self._profile_log_label(current_launch_kwargs.get('user_data_dir'))}"
                             )
                         try:
                             self.browser = await self._run_with_timeout(
@@ -9614,12 +9763,17 @@ class BrowserCaptchaService:
                                     (
                                         "nodriver.start.retry_no_sandbox",
                                         fallback_kwargs,
-                                        f"explicit_no_sandbox after {type(start_error).__name__}: {start_error}",
+                                        (
+                                            "explicit_no_sandbox after browser_start_failed"
+                                            if self._persistent_profile_dir is not None
+                                            else f"explicit_no_sandbox after {type(start_error).__name__}: {start_error}"
+                                        ),
                                     ),
                                 )
 
                             if (
                                 not tried_fresh_profile_retry
+                                and self._can_retry_with_fresh_profile()
                                 and self._is_retryable_browser_launch_error(start_error)
                             ):
                                 tried_fresh_profile_retry = True
@@ -9687,13 +9841,12 @@ class BrowserCaptchaService:
                     self._reset_browser_launch_failure_state()
                     if self._idle_reaper_task is None or self._idle_reaper_task.done():
                         self._idle_reaper_task = asyncio.create_task(self._idle_tab_reaper_loop())
-                    profile_label = self.user_data_dir or "<isolated-temp>"
+                    profile_label = self._profile_log_label(self.user_data_dir)
                     debug_logger.log_info(
                         f"[BrowserCaptcha] ✅ nodriver 浏览器已启动 (Profile: {profile_label})"
                     )
 
                 except Exception as e:
-                    self.browser = None
                     self._initialized = False
                     self._mark_browser_health(False)
                     if self._is_memory_pressure_browser_launch_error(e):
@@ -9702,12 +9855,22 @@ class BrowserCaptchaService:
                             aggressive=True,
                         )
                     self._mark_browser_launch_failure(e)
+                    launch_error_label = (
+                        "browser_start_failed"
+                        if self._persistent_profile_dir is not None
+                        else f"{type(e).__name__}: {str(e)}"
+                    )
+                    launch_args_label = (
+                        "<redacted-for-persistent-profile>"
+                        if self._persistent_profile_dir is not None
+                        else (' '.join(effective_launch_args) if effective_launch_args else '<none>')
+                    )
                     debug_logger.log_error(
                         "[BrowserCaptcha] ❌ 浏览器启动失败: "
-                        f"{type(e).__name__}: {str(e)} | "
+                        f"{launch_error_label} | "
                         f"display={display_value or '<empty>'} | "
                         f"executable={browser_executable_path or '<auto>'} | "
-                        f"args={' '.join(effective_launch_args) if effective_launch_args else '<none>'} | "
+                        f"args={launch_args_label} | "
                         f"cooldown={self._get_browser_launch_cooldown_remaining_seconds():.1f}s"
                     )
                     raise
@@ -12038,8 +12201,30 @@ class BrowserCaptchaService:
         *,
         timeout_seconds: float = 300,
         poll_interval_seconds: float = 0.5,
+        bootstrap_google_cookies: Optional[str] = None,
     ) -> Dict[str, str]:
         """等待原生登录完成并返回仅供进程内持久化的规范化会话。"""
+        bootstrap_cookie_text = str(bootstrap_google_cookies or "").strip()
+        if bootstrap_cookie_text:
+            await self.initialize()
+            bootstrap_items = [
+                cookie
+                for cookie in parse_browser_cookie_payload(bootstrap_cookie_text)
+                if str(cookie.get("name") or "").strip()
+                not in PERSONAL_FLOW_SESSION_COOKIE_NAMES
+            ]
+            bootstrap_targets = self._build_personal_cookie_targets(bootstrap_items)
+            if bootstrap_targets:
+                try:
+                    await self._set_browser_cookie_targets(
+                        bootstrap_targets,
+                        label="persistent_profile_recovery_bootstrap",
+                    )
+                except Exception:
+                    debug_logger.log_warning(
+                        "[BrowserCaptcha] persistent profile recovery bootstrap failed"
+                    )
+
         tab = await self.open_account_onboarding_window()
         browser_context_id = self._extract_tab_browser_context_id(tab)
         timeout = max(0.01, float(timeout_seconds or 0.0))
@@ -12199,8 +12384,8 @@ class BrowserCaptchaService:
                                 session_token = cookie.value
                                 break
 
-                    except Exception as e:
-                        debug_logger.log_warning(f"[BrowserCaptcha] 通过 cookies API 获取失败: {e}，尝试从 document.cookie 获取...")
+                    except Exception:
+                        debug_logger.log_warning("[BrowserCaptcha] 通过 cookies API 获取失败，尝试从 document.cookie 获取...")
 
                         try:
                             all_cookies = await self._tab_evaluate(
@@ -12214,8 +12399,8 @@ class BrowserCaptchaService:
                                     if part.startswith("__Secure-next-auth.session-token="):
                                         session_token = part.split("=", 1)[1]
                                         break
-                        except Exception as e2:
-                            debug_logger.log_error(f"[BrowserCaptcha] document.cookie 获取失败: {e2}")
+                        except Exception:
+                            debug_logger.log_error("[BrowserCaptcha] document.cookie 获取失败")
 
                 duration_ms = (time.time() - start_time) * 1000
 
@@ -12232,7 +12417,7 @@ class BrowserCaptchaService:
                 return None
 
             except Exception as e:
-                debug_logger.log_error(f"[BrowserCaptcha] 刷新 Session Token 异常: {str(e)}")
+                debug_logger.log_error("[BrowserCaptcha] 刷新 Session Token 异常")
 
                 if attempt == 0 and self._is_browser_runtime_error(e):
                     if await self._recover_browser_runtime(project_id, reason=f"refresh_session:{slot_id}"):
@@ -14331,10 +14516,10 @@ class _PersonalBrowserPoolService:
                 )
                 excluded_indexes.add(worker_index)
                 session_token = await worker.refresh_session_token(project_id, token_id=token_id)
-            except Exception as e:
+            except Exception:
                 worker_label = worker_index + 1 if worker_index is not None else "unknown"
                 debug_logger.log_warning(
-                    f"[BrowserCaptchaPool] Session Token 刷新失败，尝试切换其他实例 (worker={worker_label}): {e}"
+                    f"[BrowserCaptchaPool] Session Token 刷新失败，尝试切换其他实例 (worker={worker_label})"
                 )
                 continue
             finally:

@@ -72,9 +72,10 @@ class TestPageContractTests(unittest.TestCase):
                 f"{control_id} must have a keyboard/screen-reader label",
             )
         self.assertIn(
-            "Omni Flash 可选 8 秒或 10 秒；Veo 3.1 保持 8 秒",
+            "原生清晰度（外部客户端请选择 720P）",
             self.html,
         )
+        self.assertNotIn("Omni Flash 可选 8 秒或 10 秒", self.html)
         self.assertIn("/static/test-page-capabilities.js", self.html)
 
     def test_formal_menu_has_no_legacy_or_long_list_copy(self):
@@ -253,6 +254,71 @@ process.stdout.write(JSON.stringify({
             },
             payload,
         )
+
+    def test_capability_usage_helper_exposes_method_guide_and_exact_image_requirement(self):
+        self.assertTrue(self.helper, "static/test-page-capabilities.js must exist")
+        payload = self._run_node(
+            """
+const api = require("./static/test-page-capabilities.js");
+const capability = {
+  model_type:"video",
+  generation_mode:"first_last_frame_to_video",
+  generation_modes:[{id:"first_last_frame_to_video",label:"首尾帧生视频"}],
+  image_semantics:"恰好 2 张图片：第 1 张首帧，第 2 张尾帧",
+  usage_guide:"按首帧、尾帧顺序上传恰好 2 张图片并选择 8 秒。",
+  min_images:2,
+  max_images:2
+};
+process.stdout.write(JSON.stringify({
+  usage: api.getCapabilityUsageMeta(capability),
+  one: api.validateCapabilityImageCount(capability, 1),
+  two: api.validateCapabilityImageCount(capability, 2),
+  three: api.validateCapabilityImageCount(capability, 3)
+}));
+"""
+        )
+        self.assertEqual(
+            {
+                "generationMode": "first_last_frame_to_video",
+                "generationModeLabel": "首尾帧生视频",
+                "imageSemantics": "恰好 2 张图片：第 1 张首帧，第 2 张尾帧",
+                "usageGuide": "按首帧、尾帧顺序上传恰好 2 张图片并选择 8 秒。",
+                "minImages": 2,
+                "maxImages": 2,
+                "requiresImages": True,
+                "nativeResolutionNote": "原生清晰度（外部客户端请选择 720P）",
+            },
+            payload["usage"],
+        )
+        self.assertEqual(
+            {"valid": False, "message": "需要上传 2 张图片后才能生成"},
+            payload["one"],
+        )
+        self.assertEqual(
+            {"valid": True, "message": "图片数量符合当前能力要求"},
+            payload["two"],
+        )
+        self.assertEqual(
+            {"valid": False, "message": "当前能力最多接受 2 张图片"},
+            payload["three"],
+        )
+
+    def test_video_usage_rendering_and_image_count_gate_are_catalog_driven(self):
+        self.assertIn('id="videoCapabilityGuide"', self.html)
+        update = self._function_source("updateResolvedModel")
+        refresh = self._function_source("refreshGenerateButton")
+        previews = self._function_source("renderImagePreviews")
+        self.assertIn("getCapabilityUsageMeta", update)
+        self.assertIn("videoCapabilityGuide", update)
+        self.assertIn("nativeResolutionNote", update)
+        self.assertIn("validateCapabilityImageCount", refresh)
+        self.assertIn("imageValidation.valid", refresh)
+        self.assertIn("imageValidation.message", refresh)
+        self.assertIn("refreshGenerateButton()", previews)
+        self.assertNotIn("veo_3_1", self.html + self.helper)
+        self.assertNotIn("omni_portrait", self.html + self.helper)
+        self.assertNotIn("const VIDEO_MODELS", self.html + self.helper)
+        self.assertNotIn("const VIDEO_CAPABILITY_MAP", self.html + self.helper)
 
     def test_validated_catalog_leaves_hidden_diagnostic_list_empty(self):
         payload = self._run_node(

@@ -73,6 +73,18 @@ class Batch5ManageContractTests(unittest.TestCase):
         missing = sorted(field for field in required_fields if field not in source)
         self.assertEqual([], missing, f"account renderer omits Batch 5 fields: {missing}")
 
+    def test_account_rows_offer_reauth_only_from_public_capability(self):
+        action_source = self._function_source("renderTokenActions", "renderTokens")
+        reauth_source = self._function_source("reauthToken", "refreshTokenCredits")
+        self.assertTrue(action_source, "manage page has no account action renderer")
+        self.assertTrue(reauth_source, "manage page has no account re-login action")
+        self.assertIn("can_reauth", action_source)
+        self.assertIn("重新登录并启用", action_source)
+        self.assertRegex(reauth_source, r"/api/tokens/\$\{id\}/reauth")
+        self.assertNotIn("account_profile_key", self.html)
+        for status in ("正常", "等待自动恢复", "稍后重试", "需要重新登录", "已停用"):
+            self.assertIn(status, self.html)
+
     def test_captcha_configuration_never_logs_config_or_secret_inputs(self):
         load_source = self._function_source("loadCaptchaConfig", "saveCaptchaConfig")
         save_source = self._function_source("saveCaptchaConfig", "loadPluginConfig")
@@ -120,6 +132,19 @@ class Batch5ManageContractTests(unittest.TestCase):
             edit_source,
             "edit form must not recover credentials from the paginated list payload",
         )
+
+    def test_dashboard_distinguishes_enabled_and_generation_ready_accounts(self):
+        stats_source = self._function_source("loadStats", "loadAdminTestCapability")
+        self.assertTrue(stats_source, "manage page has no dashboard stats loader")
+        self.assertIn("active_tokens", stats_source)
+        self.assertIn("ready_tokens", stats_source)
+
+    def test_export_control_does_not_claim_to_back_up_google_login_state(self):
+        export_source = self._function_source("exportTokens", "importTokens")
+        self.assertTrue(export_source, "manage page has no export guidance")
+        for forbidden in ("access_token", "session_token", "google_cookies"):
+            self.assertNotIn(forbidden, export_source)
+        self.assertIn("不含 Google 登录态", self.html)
 
 
 if __name__ == "__main__":

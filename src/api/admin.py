@@ -3,6 +3,7 @@ import asyncio
 import importlib
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
@@ -45,6 +46,7 @@ db: Database = None
 concurrency_manager: Optional[ConcurrencyManager] = None
 captcha_runtime_prepare_tasks: Dict[str, asyncio.Task] = {}
 account_onboarding_service = None
+account_profile_store = None
 
 # Store active admin session tokens (in production, use Redis or database)
 active_admin_tokens = set()
@@ -548,6 +550,16 @@ async def _score_test_with_remote_browser_service(
     return response_payload
 
 
+def _get_account_profile_store():
+    global account_profile_store
+    if account_profile_store is None:
+        from ..services.account_profile_store import AccountProfileStore
+
+        root = Path(__file__).resolve().parents[2] / "data" / "account_profiles"
+        account_profile_store = AccountProfileStore(root)
+    return account_profile_store
+
+
 def set_dependencies(tm: TokenManager, pm: ProxyManager, database: Database, cm: Optional[ConcurrencyManager] = None):
     """Set service instances"""
     global token_manager, proxy_manager, db, concurrency_manager
@@ -559,13 +571,18 @@ def set_dependencies(tm: TokenManager, pm: ProxyManager, database: Database, cm:
     configure_extension_pairing_storage(database)
 
 
-async def _persist_native_onboarding_result(result: Dict[str, Any]) -> str:
+async def _persist_native_onboarding_result(
+    result: Dict[str, Any],
+    *,
+    account_profile_key: str,
+) -> str:
     """Persist one private browser capture through the existing TokenManager."""
     if not isinstance(result, dict):
         raise ValueError("invalid onboarding result")
     session_token = str(result.get("st") or "").strip()
     google_cookies = str(result.get("google_cookies") or "").strip()
-    if not session_token or not google_cookies:
+    profile_key = str(account_profile_key or "").strip()
+    if not session_token or not google_cookies or not profile_key:
         raise ValueError("incomplete onboarding result")
 
     converted = await token_manager.flow_client.st_to_at(session_token)
@@ -585,26 +602,215 @@ async def _persist_native_onboarding_result(result: Dict[str, Any]) -> str:
 
     existing = await db.get_token_by_email(email)
     if existing is None:
-        await token_manager.add_token(
+        added = await token_manager.add_token(
             st=session_token,
             remark="Added from native browser login",
             protocol_mode="protocol",
             google_cookies=google_cookies,
+            account_profile_key="",
         )
+        await db.update_token(added.id, account_profile_key=profile_key)
         return "success"
 
-    was_active = bool(existing.is_active)
-    await token_manager.update_token(
-        token_id=existing.id,
+    clear_validation_cache = getattr(token_manager, "_clear_at_validation_cache", None)
+    if callable(clear_validation_cache):
+        clear_validation_cache(existing.id)
+    await db.update_token(
+        existing.id,
         st=session_token,
         at=access_token,
         at_expires=at_expires,
         protocol_mode="protocol",
         google_cookies=google_cookies,
+        account_profile_key=profile_key,
+        auth_state="ok",
+        auth_failure_count=0,
+        auth_next_retry_at=None,
+        last_auth_error_class="",
     )
-    if not was_active:
-        await token_manager.disable_token(existing.id)
     return "updated"
+
+
+async def _persist_native_reauth_result(
+    token_id: int,
+    result: Dict[str, Any],
+    *,
+    account_profile_key: str,
+) -> str:
+    """Persist an explicit re-login only when the captured identity matches the target account."""
+    existing = await db.get_token(token_id)
+    if existing is None:
+        raise ValueError("token_not_found")
+    if not isinstance(result, dict):
+        raise ValueError("invalid_reauth_result")
+
+    session_token = str(result.get("st") or "").strip()
+    google_cookies = str(result.get("google_cookies") or "").strip()
+    profile_key = str(account_profile_key or "").strip()
+    if not session_token or not google_cookies or not profile_key:
+        raise ValueError("incomplete_reauth_result")
+
+    converted = await token_manager.flow_client.st_to_at(session_token)
+    access_token = str(converted.get("access_token") or "").strip()
+    user = converted.get("user") if isinstance(converted.get("user"), dict) else {}
+    recovered_email = str(user.get("email") or "").strip()
+    expected_email = str(getattr(existing, "email", "") or "").strip()
+    if not access_token or not recovered_email:
+        raise ValueError("incomplete_reauth_identity")
+    if recovered_email.casefold() != expected_email.casefold():
+        await token_manager._mark_auth_failure(
+            token_id,
+            "identity_mismatch",
+            interactive=True,
+        )
+        raise ValueError("identity_mismatch")
+
+    at_expires = None
+    expires = converted.get("expires")
+    if expires:
+        try:
+            at_expires = datetime.fromisoformat(str(expires).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            at_expires = None
+
+    clear_validation_cache = getattr(token_manager, "_clear_at_validation_cache", None)
+    if callable(clear_validation_cache):
+        clear_validation_cache(token_id)
+    await db.commit_account_reauth(
+        token_id,
+        st=session_token,
+        at=access_token,
+        at_expires=at_expires,
+        google_cookies=google_cookies,
+        account_profile_key=profile_key,
+    )
+    return "success"
+
+
+async def _run_account_reauth(token_id: int) -> Dict[str, Any]:
+    """Run one explicit headed re-login from an isolated copy of the target profile."""
+    existing = await db.get_token(token_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    profile_store = _get_account_profile_store()
+    existing_key = str(getattr(existing, "account_profile_key", "") or "").strip()
+    candidate_key = ""
+
+    def cleanup_candidate() -> None:
+        if not candidate_key:
+            return
+        try:
+            profile_store.remove(candidate_key)
+        except Exception:
+            pass
+
+    try:
+        if existing_key and profile_store.exists(existing_key):
+            candidate_key = profile_store.clone_to_new_key(existing_key)
+            candidate_dir = profile_store.resolve(candidate_key)
+        else:
+            candidate_key = profile_store.create_key()
+            candidate_dir = profile_store.resolve(candidate_key, create=True)
+    except Exception:
+        cleanup_candidate()
+        await token_manager._mark_auth_failure(
+            token_id,
+            "profile_corrupt",
+            interactive=True,
+        )
+        return {"success": False, "auth_status": "需要重新登录"}
+
+    from ..services.browser_captcha_personal import BrowserCaptchaService
+
+    browser = BrowserCaptchaService(
+        db,
+        force_headed=True,
+        persistent_profile_dir=candidate_dir,
+    )
+    private_result = None
+    browser_error_class = ""
+    browser_error_interactive = False
+    browser_error_status = ""
+
+    def record_browser_error(stage: str, error_class: str, exc: Exception) -> None:
+        from ..core.logger import debug_logger
+
+        debug_logger.log_warning(
+            "[AccountReauth] browser operation failed: "
+            f"stage={stage} error_class={error_class} "
+            f"exception_type={type(exc).__name__}"
+        )
+
+    try:
+        try:
+            await browser.initialize()
+        except Exception as exc:
+            browser_error_class = "browser_start_failed"
+            browser_error_status = "稍后重试"
+            record_browser_error("initialize", browser_error_class, exc)
+
+        if not browser_error_class:
+            try:
+                private_result = await browser.capture_account_onboarding_result()
+            except TimeoutError as exc:
+                browser_error_class = "interactive_verification"
+                browser_error_interactive = True
+                browser_error_status = "需要重新登录"
+                record_browser_error("capture", browser_error_class, exc)
+            except Exception as exc:
+                browser_error_class = "network"
+                browser_error_status = "稍后重试"
+                record_browser_error("capture", browser_error_class, exc)
+    finally:
+        try:
+            await browser.close()
+        except Exception as exc:
+            record_browser_error("close", "network", exc)
+            if not browser_error_class:
+                browser_error_class = "network"
+                browser_error_status = "稍后重试"
+
+    if browser_error_class:
+        cleanup_candidate()
+        await token_manager._mark_auth_failure(
+            token_id,
+            browser_error_class,
+            interactive=browser_error_interactive,
+        )
+        return {"success": False, "auth_status": browser_error_status}
+
+    try:
+        await _persist_native_reauth_result(
+            token_id,
+            private_result,
+            account_profile_key=candidate_key,
+        )
+    except ValueError as exc:
+        cleanup_candidate()
+        if str(exc) == "identity_mismatch":
+            return {"success": False, "auth_status": "需要重新登录"}
+        await token_manager._mark_auth_failure(
+            token_id,
+            "interactive_verification",
+            interactive=True,
+        )
+        return {"success": False, "auth_status": "需要重新登录"}
+    except Exception:
+        cleanup_candidate()
+        await token_manager._mark_auth_failure(
+            token_id,
+            "network",
+            interactive=False,
+        )
+        return {"success": False, "auth_status": "稍后重试"}
+
+    if existing_key and existing_key != candidate_key:
+        try:
+            profile_store.remove(existing_key)
+        except Exception:
+            pass
+    return {"success": True, "auth_status": "正常"}
 
 
 async def _get_account_onboarding_service():
@@ -619,15 +825,32 @@ async def _get_account_onboarding_service():
         return len(await token_manager.get_all_tokens())
 
     async def launch_browser(_session_id: str):
+        profile_store = _get_account_profile_store()
+        profile_key = profile_store.create_key()
+        profile_dir = profile_store.resolve(profile_key, create=True)
+        profile_persisted = False
         browser = BrowserCaptchaService(
             db,
             force_headed=True,
+            persistent_profile_dir=profile_dir,
         )
         try:
             private_result = await browser.capture_account_onboarding_result()
-            return await _persist_native_onboarding_result(private_result)
+            outcome = await _persist_native_onboarding_result(
+                private_result,
+                account_profile_key=profile_key,
+            )
+            profile_persisted = True
+            return outcome
         finally:
-            await browser.close()
+            try:
+                await browser.close()
+            finally:
+                if not profile_persisted:
+                    try:
+                        profile_store.remove(profile_key)
+                    except Exception:
+                        pass
 
     account_onboarding_service = AccountOnboardingService(
         account_counter=count_accounts,
@@ -867,13 +1090,7 @@ async def get_admin_test_accounts(token: str = Depends(verify_admin_token)):
     items = []
     for row in list(page_data.get("items") or []):
         token_id = int(row.get("id"))
-        ban_reason = str(row.get("ban_reason") or "").strip().lower()
-        if "auth" in ban_reason:
-            auth_status = "authentication_failed"
-        elif bool(row.get("is_active")):
-            auth_status = "active"
-        else:
-            auth_status = "inactive"
+        auth_status, _, _ = _project_public_auth_status(row)
         display_name = str(row.get("name") or row.get("remark") or f"account-{token_id}")
         items.append(
             {
@@ -903,10 +1120,24 @@ async def get_extension_connection_status(token: str = Depends(verify_admin_toke
     }
     if response["captcha_mode"] == "personal":
         active_tokens = list(await token_manager.get_active_tokens())
+        ready_tokens = [
+            item
+            for item in active_tokens
+            if str(getattr(item, "auth_state", "ok") or "").strip() == "ok"
+            and (
+                not hasattr(item, "account_profile_key")
+                or bool(str(getattr(item, "account_profile_key", "") or "").strip())
+            )
+        ]
         response["active_account_count"] = len(active_tokens)
-        response["ready_account_count"] = len(active_tokens)
-        if active_tokens:
+        response["ready_account_count"] = len(ready_tokens)
+        if ready_tokens:
             response.update(status="ready", error_class=None)
+        elif active_tokens:
+            response.update(
+                status="account_reauth_required",
+                error_class="account_authentication_required",
+            )
         else:
             response.update(
                 status="account_required",
@@ -999,6 +1230,46 @@ async def change_password(
 
 
 # ========== Token Management ==========
+
+def _project_public_auth_status(
+    row: Dict[str, Any],
+    *,
+    now: Optional[datetime] = None,
+):
+    """Project internal recovery metadata to the five stable public states."""
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+
+    if not bool(row.get("is_active")):
+        return "已停用", 0, False
+
+    has_profile = bool(row.get("has_account_profile"))
+    state = str(row.get("auth_state") or "").strip()
+    if not has_profile:
+        return "需要重新登录", 0, True
+    if state == "ok":
+        return "正常", 0, False
+    if state == "refresh_pending":
+        return "等待自动恢复", 0, False
+    if state == "backoff":
+        retry_at = row.get("auth_next_retry_at")
+        if isinstance(retry_at, str):
+            try:
+                retry_at = datetime.fromisoformat(retry_at.replace("Z", "+00:00"))
+            except ValueError:
+                retry_at = None
+        if isinstance(retry_at, datetime):
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            seconds = max(0, int((retry_at - current).total_seconds() + 0.999))
+        else:
+            seconds = 0
+        return "稍后重试", seconds, False
+    if state == "reauth_required":
+        return "需要重新登录", 0, True
+    return "需要重新登录", 0, True
+
 
 @router.get("/api/tokens")
 async def get_tokens(
@@ -1094,13 +1365,7 @@ async def get_tokens(
         credits = max(0, int(row.get("credits") or 0))
         credits_reserved = max(0, int(row.get("credits_reserved") or 0))
         is_active = bool(row.get("is_active"))
-        ban_reason = str(row.get("ban_reason") or "").strip().lower()
-        if "auth" in ban_reason:
-            auth_status = "authentication_failed"
-        elif is_active:
-            auth_status = "active"
-        else:
-            auth_status = "inactive"
+        auth_status, auth_retry_after_seconds, can_reauth = _project_public_auth_status(row)
         display_name = str(row.get("name") or row.get("remark") or f"account-{token_id}")
         raw_concurrency_status = dict(concurrency_snapshot.get(token_id) or {})
         concurrency_status = {
@@ -1117,6 +1382,8 @@ async def get_tokens(
             "display_name": display_name,
             "is_active": is_active,
             "auth_status": auth_status,
+            "auth_retry_after_seconds": auth_retry_after_seconds,
+            "can_reauth": can_reauth,
             "status": "unknown" if status_unavailable else "ok",
             "error_class": "status_unavailable" if status_unavailable else None,
             "credits": credits,
@@ -1314,6 +1581,15 @@ async def disable_token(
     return {"success": True, "message": "Token已禁用"}
 
 
+@router.post("/api/tokens/{token_id}/reauth")
+async def reauth_token(
+    token_id: int,
+    token: str = Depends(verify_admin_token),
+):
+    _ = token
+    return await _run_account_reauth(token_id)
+
+
 @router.post("/api/tokens/{token_id}/refresh-credits")
 async def refresh_credits(
     token_id: int,
@@ -1378,9 +1654,9 @@ async def refresh_at(
             raise HTTPException(status_code=500, detail=error_detail)
     except HTTPException:
         raise
-    except Exception as e:
-        debug_logger.log_error(f"[API] 刷新AT异常: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"刷新AT失败: {str(e)}")
+    except Exception:
+        debug_logger.log_error("[API] 刷新AT异常")
+        raise HTTPException(status_code=500, detail="刷新AT失败")
 
 
 @router.post("/api/tokens/st2at")

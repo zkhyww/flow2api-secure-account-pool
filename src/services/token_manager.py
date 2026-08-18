@@ -2,6 +2,7 @@
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional, List
 from ..core.database import Database
 from ..core.config import config
@@ -15,9 +16,10 @@ from .proxy_manager import ProxyManager
 class TokenManager:
     """Token lifecycle manager with AT auto-refresh"""
 
-    def __init__(self, db: Database, flow_client: FlowClient):
+    def __init__(self, db: Database, flow_client: FlowClient, account_profile_store=None):
         self.db = db
         self.flow_client = flow_client
+        self._account_profile_store = account_profile_store
         self._refresh_lock_guard = asyncio.Lock()
         self._project_lock_guard = asyncio.Lock()
         self._refresh_locks: dict[int, asyncio.Lock] = {}
@@ -112,6 +114,148 @@ class TokenManager:
         if expires_at <= time.monotonic():
             self._clear_at_validation_cache(token_id)
             return False
+        return True
+
+    async def _mark_auth_success(self, token_id: int) -> None:
+        await self.db.update_token_auth_state(
+            token_id,
+            state="ok",
+            failure_count=0,
+            next_retry_at=None,
+            error_class="",
+        )
+
+    async def _mark_auth_failure(
+        self,
+        token_id: int,
+        error_class: str,
+        *,
+        interactive: bool,
+    ) -> None:
+        token = await self.db.get_token(token_id)
+        previous_count = max(0, int(getattr(token, "auth_failure_count", 0) or 0)) if token else 0
+        failure_count = previous_count + 1
+        if interactive:
+            state = "reauth_required"
+            next_retry_at = None
+        else:
+            state = "backoff"
+            delay_seconds = min(1800, 30 * (2 ** min(failure_count - 1, 10)))
+            next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+        await self.db.update_token_auth_state(
+            token_id,
+            state=state,
+            failure_count=failure_count,
+            next_retry_at=next_retry_at,
+            error_class=error_class,
+        )
+
+    def _get_account_profile_store(self):
+        if self._account_profile_store is None:
+            from .account_profile_store import AccountProfileStore
+
+            profile_root = Path(__file__).resolve().parents[2] / "data" / "account_profiles"
+            self._account_profile_store = AccountProfileStore(profile_root)
+        return self._account_profile_store
+
+    async def _try_persistent_profile_recovery(self, token: Token) -> bool:
+        """Recover one account from its local persistent profile without changing user enable intent."""
+        token_id = int(token.id)
+        profile_key = str(getattr(token, "account_profile_key", "") or "").strip()
+        if not profile_key:
+            await self._mark_auth_failure(token_id, "profile_missing", interactive=True)
+            return False
+
+        store = self._get_account_profile_store()
+        try:
+            if not store.exists(profile_key):
+                await self._mark_auth_failure(token_id, "profile_missing", interactive=True)
+                return False
+            profile_dir = store.resolve(profile_key)
+        except Exception:
+            await self._mark_auth_failure(token_id, "profile_missing", interactive=True)
+            return False
+
+        from .browser_captcha_personal import BrowserCaptchaService
+
+        browser = BrowserCaptchaService(
+            self.db,
+            persistent_profile_dir=profile_dir,
+        )
+        private_result = None
+        close_failed = False
+        try:
+            private_result = await browser.capture_account_onboarding_result(
+                timeout_seconds=45,
+                poll_interval_seconds=0.5,
+                bootstrap_google_cookies=str(
+                    getattr(token, "google_cookies", "") or ""
+                ),
+            )
+        except TimeoutError:
+            latest = await self.db.get_token(token_id)
+            previous_count = max(
+                0,
+                int(getattr(latest, "auth_failure_count", 0) or 0),
+            )
+            await self._mark_auth_failure(
+                token_id,
+                "interactive_verification",
+                interactive=previous_count + 1 >= 3,
+            )
+            return False
+        except Exception:
+            await self._mark_auth_failure(token_id, "browser_start_failed", interactive=False)
+            return False
+        finally:
+            try:
+                await browser.close()
+            except Exception:
+                close_failed = True
+
+        if close_failed:
+            await self._mark_auth_failure(token_id, "browser_start_failed", interactive=False)
+            return False
+        if not isinstance(private_result, dict):
+            await self._mark_auth_failure(token_id, "profile_corrupt", interactive=True)
+            return False
+
+        new_st = str(private_result.get("st") or "").strip()
+        google_cookies = str(private_result.get("google_cookies") or "").strip()
+        if not new_st or not google_cookies:
+            await self._mark_auth_failure(token_id, "profile_corrupt", interactive=True)
+            return False
+
+        try:
+            converted = await self._st_to_at_for_token(token, new_st)
+        except Exception:
+            await self._mark_auth_failure(token_id, "oauth_callback_missing", interactive=False)
+            return False
+
+        new_at = str(converted.get("access_token") or "").strip()
+        user = converted.get("user") if isinstance(converted.get("user"), dict) else {}
+        recovered_email = str(user.get("email") or "").strip()
+        expected_email = str(getattr(token, "email", "") or "").strip()
+        if not new_at or not recovered_email:
+            await self._mark_auth_failure(token_id, "oauth_callback_missing", interactive=False)
+            return False
+        if recovered_email.casefold() != expected_email.casefold():
+            await self._mark_auth_failure(token_id, "identity_mismatch", interactive=True)
+            return False
+
+        updates: Dict[str, Any] = {
+            "st": new_st,
+            "at": new_at,
+            "at_expires": self._parse_at_expires(converted.get("expires")),
+            "google_cookies": google_cookies,
+            "last_st_refresh_at": datetime.now(timezone.utc),
+            "last_st_refresh_result": "success",
+        }
+        if user.get("name"):
+            updates["name"] = user.get("name")
+        await self.db.update_token(token_id, **updates)
+        self._clear_at_validation_cache(token_id)
+        await self._mark_auth_success(token_id)
         return True
 
     async def _flow_call_for_token(self, token: Token, call):
@@ -287,6 +431,7 @@ class TokenManager:
         proxy_url: Optional[str] = None,
         auto_refresh_enabled: bool = True,
         refresh_interval_minutes: int = 120,
+        account_profile_key: Optional[str] = None,
     ) -> Token:
         """Add a new token and prepare its pooled projects."""
         existing_token = await self.db.get_token_by_st(st)
@@ -370,6 +515,7 @@ class TokenManager:
             proxy_url=self._normalize_token_proxy_url(proxy_url),
             auto_refresh_enabled=bool(auto_refresh_enabled),
             refresh_interval_minutes=self._normalize_refresh_interval(refresh_interval_minutes),
+            account_profile_key=str(account_profile_key or "").strip(),
         )
 
         token_id = await self.db.add_token(token)
@@ -408,6 +554,7 @@ class TokenManager:
         proxy_url: Optional[str] = None,
         auto_refresh_enabled: Optional[bool] = None,
         refresh_interval_minutes: Optional[int] = None,
+        account_profile_key: Optional[str] = None,
     ):
         """Update token (支持修改project_id和project_name)
 
@@ -454,15 +601,11 @@ class TokenManager:
             update_fields["auto_refresh_enabled"] = bool(auto_refresh_enabled)
         if refresh_interval_minutes is not None:
             update_fields["refresh_interval_minutes"] = self._normalize_refresh_interval(refresh_interval_minutes)
+        if account_profile_key is not None:
+            update_fields["account_profile_key"] = str(account_profile_key).strip()
 
         # 检查token是否因429被禁用，如果是且未过期，则清空429状态
         token = await self.db.get_token(token_id)
-        if credential_updated and token and not token.is_active:
-            debug_logger.log_info(f"[UPDATE_TOKEN] Token {token_id} 已更新凭证，自动恢复为启用状态")
-            update_fields["is_active"] = True
-            update_fields["ban_reason"] = None
-            update_fields["banned_at"] = None
-
         if token and token.ban_reason == "429_rate_limit":
             # 检查token是否过期
             is_expired = False
@@ -535,10 +678,19 @@ class TokenManager:
                     user_paygate_tier=credits_result.get("userPaygateTier"),
                 )
                 self._mark_at_valid(token.id)
-                return await self.db.get_token(token.id) or token
-            except Exception as e:
+                validated_token = await self.db.get_token(token.id) or token
+                if (
+                    str(getattr(validated_token, "auth_state", "") or "").strip() != "ok"
+                    or int(getattr(validated_token, "auth_failure_count", 0) or 0) != 0
+                    or getattr(validated_token, "auth_next_retry_at", None) is not None
+                    or str(getattr(validated_token, "last_auth_error_class", "") or "").strip()
+                ):
+                    await self._mark_auth_success(token.id)
+                    validated_token = await self.db.get_token(token.id) or validated_token
+                return validated_token
+            except Exception:
                 debug_logger.log_warning(
-                    f"[AT_CHECK] Token {token.id}: 本地判定未过期，但上游校验失败，准备刷新 AT/ST - {e}"
+                    f"[AT_CHECK] Token {token.id}: 本地判定未过期，但上游校验失败，准备刷新 AT/ST"
                 )
 
         if not await self._refresh_at(token.id):
@@ -575,6 +727,7 @@ class TokenManager:
 
             result = await self._do_refresh_at(token_id, token.st, token)
             if result:
+                await self._mark_auth_success(token_id)
                 return True
 
             debug_logger.log_info(f"[AT_REFRESH] Token {token_id}: first AT refresh failed, trying ST refresh...")
@@ -584,10 +737,16 @@ class TokenManager:
                 latest_token = await self.db.get_token(token_id) or token
                 result = await self._do_refresh_at(token_id, new_st, latest_token)
                 if result:
+                    await self._mark_auth_success(token_id)
                     return True
 
-            debug_logger.log_error(f"[AT_REFRESH] Token {token_id}: all refresh attempts failed, disabling token")
-            await self.disable_token(token_id)
+            latest_token = await self.db.get_token(token_id) or token
+            if await self._try_persistent_profile_recovery(latest_token):
+                return True
+
+            debug_logger.log_warning(
+                f"[AT_REFRESH] Token {token_id}: all authentication recovery attempts failed"
+            )
             self._clear_at_validation_cache(token_id)
             return False
 
@@ -631,6 +790,23 @@ class TokenManager:
             )
             new_at = result["access_token"]
             expires = result.get("expires")
+            user_info = result.get("user") if isinstance(result.get("user"), dict) else {}
+            recovered_email = str(user_info.get("email") or "").strip()
+            expected_email = str(getattr(token, "email", "") or "").strip() if token is not None else ""
+            if expected_email and recovered_email.casefold() != expected_email.casefold():
+                await self.db.update_token(
+                    token_id,
+                    last_st_refresh_at=datetime.now(timezone.utc),
+                    last_st_refresh_result="identity_mismatch",
+                )
+                await self._mark_auth_failure(
+                    token_id,
+                    "identity_mismatch",
+                    interactive=True,
+                )
+                debug_logger.log_warning(f"[AT_REFRESH] Token {token_id}: 身份校验失败")
+                record_token_refresh("at", "failure")
+                return False
 
             # 解析过期时间
             new_at_expires = None
@@ -640,12 +816,20 @@ class TokenManager:
                 except:
                     pass
 
-            # 更新数据库
-            await self.db.update_token(
-                token_id,
-                at=new_at,
-                at_expires=new_at_expires
-            )
+            # 身份验证成功后一次性提交候选 ST/AT。
+            updates: Dict[str, Any] = {
+                "st": st,
+                "at": new_at,
+                "at_expires": new_at_expires,
+            }
+            if token is not None and st != token.st:
+                updates["last_st_refresh_at"] = datetime.now(timezone.utc)
+                updates["last_st_refresh_result"] = "success"
+            if recovered_email and not expected_email:
+                updates["email"] = recovered_email
+            if user_info.get("name"):
+                updates["name"] = user_info.get("name")
+            await self.db.update_token(token_id, **updates)
 
             debug_logger.log_info(f"[AT_REFRESH] Token {token_id}: AT刷新成功")
             debug_logger.log_info(f"  - 新过期时间: {new_at_expires}")
@@ -675,12 +859,12 @@ class TokenManager:
                     return False
                 else:
                     # 其他错误（如网络问题），仍视为成功
-                    debug_logger.log_warning(f"[AT_REFRESH] Token {token_id}: AT 验证时发生非认证错误: {error_msg}")
+                    debug_logger.log_warning(f"[AT_REFRESH] Token {token_id}: AT 验证时发生非认证错误")
                     record_token_refresh("at", "success")
                     return True
 
-        except Exception as e:
-            debug_logger.log_error(f"[AT_REFRESH] Token {token_id}: AT刷新失败 - {str(e)}")
+        except Exception:
+            debug_logger.log_error(f"[AT_REFRESH] Token {token_id}: AT刷新失败")
             record_token_refresh("at", "failure")
             return False
 
@@ -704,30 +888,27 @@ class TokenManager:
                 new_st = str(login_result["session_token"]).strip()
                 await self.db.update_token(
                     token_id,
-                    st=new_st,
                     last_st_refresh_at=datetime.now(timezone.utc),
-                    last_st_refresh_result="success",
+                    last_st_refresh_result="candidate_ready",
                 )
-                debug_logger.log_info(f"[ST_REFRESH] Token {token_id}: 协议刷新 ST 成功")
-                record_token_refresh("st", "success")
+                debug_logger.log_info(f"[ST_REFRESH] Token {token_id}: 协议刷新获得待验证 ST")
                 return new_st
 
-            error = str(login_result.get("error") or "协议刷新失败")
             await self.db.update_token(
                 token_id,
                 last_st_refresh_at=datetime.now(timezone.utc),
-                last_st_refresh_result=error,
+                last_st_refresh_result="protocol_refresh_failed",
             )
-            debug_logger.log_warning(f"[ST_REFRESH] Token {token_id}: 协议刷新 ST 失败 - {error}")
+            debug_logger.log_warning(f"[ST_REFRESH] Token {token_id}: 协议刷新 ST 失败")
             record_token_refresh("st", "failure")
             return None
-        except Exception as e:
+        except Exception:
             await self.db.update_token(
                 token_id,
                 last_st_refresh_at=datetime.now(timezone.utc),
-                last_st_refresh_result=str(e),
+                last_st_refresh_result="protocol_refresh_error",
             )
-            debug_logger.log_error(f"[ST_REFRESH] Token {token_id}: 协议刷新 ST 异常 - {e}")
+            debug_logger.log_error(f"[ST_REFRESH] Token {token_id}: 协议刷新 ST 异常")
             record_token_refresh("st", "failure")
             return None
 
@@ -777,10 +958,7 @@ class TokenManager:
                 record_token_refresh("st", "failure")
                 return None
             if new_st and new_st != token.st:
-                # 更新数据库中的 ST
-                await self.db.update_token(token_id, st=new_st)
-                debug_logger.log_info(f"[ST_REFRESH] Token {token_id}: ST 已自动更新")
-                record_token_refresh("st", "success")
+                debug_logger.log_info(f"[ST_REFRESH] Token {token_id}: 获得待验证 ST")
                 return new_st
             elif new_st == token.st:
                 debug_logger.log_warning(f"[ST_REFRESH] Token {token_id}: 获取到的 ST 与原 ST 相同，可能登录已失效")
@@ -791,8 +969,8 @@ class TokenManager:
                 record_token_refresh("st", "failure")
                 return None
 
-        except Exception as e:
-            debug_logger.log_error(f"[ST_REFRESH] Token {token_id}: 刷新 ST 失败 - {str(e)}")
+        except Exception:
+            debug_logger.log_error(f"[ST_REFRESH] Token {token_id}: 刷新 ST 失败")
             record_token_refresh("st", "failure")
             return None
 
@@ -816,6 +994,9 @@ class TokenManager:
 
             new_st = await self._try_protocol_refresh_st(token_id, latest)
             if not new_st:
+                latest_after_failure = await self.db.get_token(token_id) or latest
+                if self._should_refresh_at(latest_after_failure):
+                    await self._try_persistent_profile_recovery(latest_after_failure)
                 return
 
             try:
@@ -824,6 +1005,26 @@ class TokenManager:
                 if not new_at:
                     raise RuntimeError("ST 转 AT 响应缺少 access_token")
 
+                user_info = session.get("user") if isinstance(session.get("user"), dict) else {}
+                recovered_email = str(user_info.get("email") or "").strip()
+                expected_email = str(getattr(latest, "email", "") or "").strip()
+                if expected_email and recovered_email.casefold() != expected_email.casefold():
+                    await self.db.update_token(
+                        token_id,
+                        last_st_refresh_at=now,
+                        last_st_refresh_result="identity_mismatch",
+                    )
+                    await self._mark_auth_failure(
+                        token_id,
+                        "identity_mismatch",
+                        interactive=True,
+                    )
+                    record_token_refresh("at", "failure")
+                    debug_logger.log_warning(
+                        f"[PROTOCOL_REFRESH] Token {token_id}: 身份校验失败"
+                    )
+                    return
+
                 updates: Dict[str, Any] = {
                     "st": new_st,
                     "at": new_at,
@@ -831,9 +1032,8 @@ class TokenManager:
                     "last_st_refresh_at": now,
                     "last_st_refresh_result": "success",
                 }
-                user_info = session.get("user") if isinstance(session.get("user"), dict) else {}
-                if user_info.get("email"):
-                    updates["email"] = user_info.get("email")
+                if recovered_email and not expected_email:
+                    updates["email"] = recovered_email
                 if user_info.get("name"):
                     updates["name"] = user_info.get("name")
 
@@ -841,35 +1041,36 @@ class TokenManager:
                     credits_result = await self._get_credits_for_token(latest, new_at)
                     updates["credits"] = credits_result.get("credits", 0)
                     updates["user_paygate_tier"] = credits_result.get("userPaygateTier")
-                except Exception as e:
-                    debug_logger.log_warning(f"[PROTOCOL_REFRESH] Token {token_id}: 刷新余额失败 - {e}")
+                except Exception:
+                    debug_logger.log_warning(f"[PROTOCOL_REFRESH] Token {token_id}: 刷新余额失败")
 
                 await self.db.update_token(token_id, **updates)
+                await self._mark_auth_success(token_id)
                 record_token_refresh("at", "success")
                 debug_logger.log_info(f"[PROTOCOL_REFRESH] Token {token_id}: 协议刷新 ST/AT 成功")
-            except Exception as e:
+            except Exception:
                 await self.db.update_token(
                     token_id,
-                    st=new_st,
                     last_st_refresh_at=now,
-                    last_st_refresh_result=str(e),
+                    last_st_refresh_result="st_to_at_failed",
                 )
+                await self._mark_auth_failure(token_id, "oauth_callback_missing", interactive=False)
                 record_token_refresh("at", "failure")
-                debug_logger.log_error(f"[PROTOCOL_REFRESH] Token {token_id}: 协议 ST 转 AT 失败 - {e}")
+                debug_logger.log_error(f"[PROTOCOL_REFRESH] Token {token_id}: 协议 ST 转 AT 失败")
 
     async def run_protocol_refresh_once(self) -> None:
         """Refresh protocol-mode tokens whose ST refresh interval is due."""
         try:
             refresh_config = await self.db.get_token_refresh_config()
-        except Exception as e:
-            debug_logger.log_warning(f"[PROTOCOL_REFRESH] 读取刷新配置失败: {e}")
+        except Exception:
+            debug_logger.log_warning("[PROTOCOL_REFRESH] 读取刷新配置失败")
             return
 
         if not refresh_config or not refresh_config.enabled:
             return
 
-        tokens = await self.db.get_active_tokens()
         now = datetime.now(timezone.utc)
+        tokens = await self.db.get_auth_recovery_candidates(now)
         for token in tokens:
             try:
                 if not token.auto_refresh_enabled:
@@ -886,8 +1087,8 @@ class TokenManager:
                     continue
 
                 await self._refresh_protocol_token(token, now)
-            except Exception as e:
-                debug_logger.log_error(f"[PROTOCOL_REFRESH] Token {getattr(token, 'id', '?')}: 后台刷新异常 - {e}")
+            except Exception:
+                debug_logger.log_error(f"[PROTOCOL_REFRESH] Token {getattr(token, 'id', '?')}: 后台刷新异常")
 
     async def _protocol_refresh_loop(self) -> None:
         while True:
@@ -896,8 +1097,8 @@ class TokenManager:
                 await self.run_protocol_refresh_once()
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
-                debug_logger.log_error(f"[PROTOCOL_REFRESH] 后台任务异常 - {e}")
+            except Exception:
+                debug_logger.log_error("[PROTOCOL_REFRESH] 后台任务异常")
 
     def start_protocol_refresher(self) -> None:
         if self._protocol_refresher_task and not self._protocol_refresher_task.done():
@@ -914,8 +1115,8 @@ class TokenManager:
             await task
         except asyncio.CancelledError:
             pass
-        except Exception as e:
-            debug_logger.log_warning(f"[PROTOCOL_REFRESH] 停止后台任务时出错: {e}")
+        except Exception:
+            debug_logger.log_warning("[PROTOCOL_REFRESH] 停止后台任务时出错")
 
     async def ensure_project_exists(self, token_id: int) -> str:
         """Ensure a token has a pooled set of projects and return one in round-robin order."""

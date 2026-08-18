@@ -45,7 +45,7 @@ class PluginlessReadinessApiTests(unittest.IsolatedAsyncioTestCase):
         admin.token_manager = _TokenManager(
             [
                 SimpleNamespace(id=1),
-                SimpleNamespace(id=2),
+                SimpleNamespace(id=2, auth_state="reauth_required"),
                 SimpleNamespace(id=3),
             ]
         )
@@ -65,7 +65,7 @@ class PluginlessReadinessApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("ready", payload["status"])
         self.assertIsNone(payload["error_class"])
         self.assertEqual(3, payload["active_account_count"])
-        self.assertEqual(3, payload["ready_account_count"])
+        self.assertEqual(2, payload["ready_account_count"])
         self.assertFalse(payload["extension_connected"])
         extension_service.assert_not_awaited()
         self.assertNotIn("extension_not_connected", response.text)
@@ -99,9 +99,10 @@ class PluginlessManageStaticContractTests(unittest.TestCase):
             r"登录一次[^<]{0,80}(?:服务|Windows)[^<]{0,80}重启[^<]{0,80}自动恢复",
         )
 
-    def test_onboarding_button_is_clearly_for_adding_a_new_account(self):
+    def test_onboarding_copy_explains_one_time_upgrade_relogin_for_existing_accounts(self):
         self.assertIn("添加新 Google 账号", self.manage)
-        self.assertIn("已有账号无需重复登录", self.manage)
+        self.assertIn("旧账号升级后", self.manage)
+        self.assertIn("逐个重新登录一次", self.manage)
 
     def test_extension_controls_are_only_in_explicit_advanced_fallback(self):
         details = re.search(

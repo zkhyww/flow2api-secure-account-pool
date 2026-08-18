@@ -75,6 +75,47 @@
     ));
   }
 
+  function getCapabilityUsageMeta(capability) {
+    const entry = capability || {};
+    const generationMode = String(entry.generation_mode || "");
+    const generationModes = Array.isArray(entry.generation_modes)
+      ? entry.generation_modes
+      : [];
+    const selectedMode = generationModes.find(item => (
+      String(item && item.id || "") === generationMode
+    )) || generationModes[0] || {};
+    const minImages = Math.max(0, Number(entry.min_images || 0));
+    const maxImages = Math.max(minImages, Number(entry.max_images || 0));
+    return {
+      generationMode: generationMode || String(selectedMode.id || ""),
+      generationModeLabel: String(selectedMode.label || generationMode || ""),
+      imageSemantics: String(entry.image_semantics || ""),
+      usageGuide: String(entry.usage_guide || entry.description || ""),
+      minImages,
+      maxImages,
+      requiresImages: minImages > 0,
+      nativeResolutionNote: "原生清晰度（外部客户端请选择 720P）",
+    };
+  }
+
+  function validateCapabilityImageCount(capability, imageCount) {
+    const usage = getCapabilityUsageMeta(capability);
+    const count = Math.max(0, Number(imageCount || 0));
+    if (count < usage.minImages) {
+      const message = usage.minImages === usage.maxImages
+        ? `需要上传 ${usage.minImages} 张图片后才能生成`
+        : `需要至少上传 ${usage.minImages} 张图片后才能生成`;
+      return { valid: false, message };
+    }
+    if (count > usage.maxImages) {
+      return {
+        valid: false,
+        message: `当前能力最多接受 ${usage.maxImages} 张图片`,
+      };
+    }
+    return { valid: true, message: "图片数量符合当前能力要求" };
+  }
+
   function listHiddenDiagnosticMappings(catalog) {
     const diagnostics = [];
     (Array.isArray(catalog) ? catalog : []).forEach(capability => {
@@ -118,6 +159,8 @@
     listVisibleCapabilities,
     listVisibleOptions,
     selectPreferredOptionValue,
+    getCapabilityUsageMeta,
+    validateCapabilityImageCount,
     listHiddenDiagnosticMappings,
     resolveCapabilityModelId,
     resolveExtendModelId,

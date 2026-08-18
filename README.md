@@ -170,9 +170,9 @@ Prometheus 可直接抓 `/metrics`。如果部署到 Kubernetes，建议只在�
 
 访问 **http://localhost:8000/test** 可打开内置的模型测试页面，支持：
 
-- 在“图片 / 视频”之间切换，并分别选择模型、比例、清晰度或目录开放的时长；Omni Flash 可选 8/10 秒且默认 10 秒，Veo 3.1 保持 8 秒
-- 由服务端 capability metadata 将参数组合解析为现有兼容模型 ID，旧客户端仍可直接调用兼容 ID
-- 输入提示词一键测试，流式显示生成进度；图生图 / 图生视频场景继续支持参考图上传
+- 在“图片 / 视频”之间切换，并分别选择公开 capability、比例与目录开放的时长；文生、首帧、首尾帧、References 作为独立视频能力展示
+- 由服务端 capability metadata 将参数组合解析为现有兼容模型 ID；页面同时显示生成方式、图片用途/张数与 `原生清晰度（外部客户端请选择 720P）`
+- 输入提示词一键测试，流式显示生成进度；需要图片的视频能力在达到目录规定的精确张数前会禁用提交
 - 成功视频旁提供“续写此视频”动作；源标识只保存在页面内存，不进入普通模型菜单或可见文本
 
 ## 📋 支持的模型
@@ -197,26 +197,36 @@ Codex 提供的真实 Flow 白名单矩阵：
 
 ### 视频能力（公开目录）
 
-`GET /v1/models`、`GET /api/test/models` 与内置测试页共用同一份六能力目录。视频不复制横竖组合为八个“模型”；Omni Flash 正式开放 **8 秒、10 秒**并默认 10 秒，Veo 3.1 Lite/Fast/Quality 仍只开放 8 秒。4s/6s、1080P/4K 派生和重复别名不公开。
+`GET /v1/models`、`GET /api/test/models` 与内置测试页共用同一份服务端目录。视频按“生成方式”拆成 12 个明确 capability；横竖画幅仍作为参数，不另复制一套客户端模型表。Omni 文生支持 8/10 秒，Omni References 只开放 8 秒；Veo 3.1 本轮公开能力均为 8 秒。
 
-| Capability ID | 页面名称 | 比例 | 时长 | 验证状态 |
-|---|---|---|---|---|
-| `omni-flash` | Omni Flash | 16:9、9:16 | 8 秒、10 秒（默认） | 8 秒两画幅 validated；10 秒两画幅 completed、has_media=true、decoded_duration=10.005 |
-| `veo-3.1-lite` | Veo 3.1 Lite | 16:9、9:16 | 8 秒 | 两画幅 validated |
-| `veo-3.1-fast` | Veo 3.1 Fast | 16:9、9:16 | 8 秒 | 两画幅 validated |
-| `veo-3.1-quality` | Veo 3.1 Quality | 16:9、9:16 | 8 秒 | 两画幅 validated |
+| Capability ID | 生成方式 | 图片要求 | 时长 | 16:9 内部映射 | 9:16 内部映射 |
+|---|---|---:|---|---|---|
+| `omni-flash` | 文生视频 | 0 张 | 8/10 秒 | `omni` / `omni_10s` | `omni_portrait` / `omni_portrait_10s` |
+| `omni-flash-references` | 参考图生视频 | 1–3 张 | 8 秒 | `omni` | `omni_portrait` |
+| `veo-3.1-lite` | 文生视频 | 0 张 | 8 秒 | `veo_3_1_t2v_lite_landscape_8s` | `veo_3_1_t2v_lite_portrait_8s` |
+| `veo-3.1-lite-first-frame` | 首帧生视频 | 恰好 1 张 | 8 秒 | `veo_3_1_i2v_lite_landscape_8s` | `veo_3_1_i2v_lite_portrait_8s` |
+| `veo-3.1-lite-first-last` | 首尾帧生视频 | 恰好 2 张 | 8 秒 | `veo_3_1_interpolation_lite_landscape_8s` | `veo_3_1_interpolation_lite_portrait_8s` |
+| `veo-3.1-fast` | 文生视频 | 0 张 | 8 秒 | `veo_3_1_t2v_fast_landscape_8s` | `veo_3_1_t2v_fast_portrait_8s` |
+| `veo-3.1-fast-first-frame` | 首帧生视频 | 恰好 1 张 | 8 秒 | `veo_3_1_i2v_s_fast_landscape_8s_fl` | `veo_3_1_i2v_s_fast_portrait_8s_fl` |
+| `veo-3.1-fast-first-last` | 首尾帧生视频 | 恰好 2 张 | 8 秒 | `veo_3_1_i2v_s_fast_landscape_8s_fl` | `veo_3_1_i2v_s_fast_portrait_8s_fl` |
+| `veo-3.1-fast-references` | 参考图生视频 | 1–3 张 | 8 秒 | `veo_3_1_r2v_fast_landscape` | `veo_3_1_r2v_fast_portrait` |
+| `veo-3.1-quality` | 文生视频 | 0 张 | 8 秒 | `veo_3_1_t2v_landscape_8s` | `veo_3_1_t2v_portrait_8s` |
+| `veo-3.1-quality-first-frame` | 首帧生视频 | 恰好 1 张 | 8 秒 | `veo_3_1_i2v_s_landscape_8s` | `veo_3_1_i2v_s_portrait_8s` |
+| `veo-3.1-quality-first-last` | 首尾帧生视频 | 恰好 2 张 | 8 秒 | `veo_3_1_i2v_s_landscape_8s` | `veo_3_1_i2v_s_portrait_8s` |
 
-Omni Flash 的当前正式 capability 是文生视频入口，上传限制为 0–0；页面不声称它支持参考图。其横竖 10 秒入口均已真实完成并解码为 10.005 秒。Extend 是成功视频后的动作，不是普通可选模型；横竖续写入口均已真实 validated，并按源视频画幅自动选择。源标识只保存在内存，不进入日志、可见 DOM 文本或报告。
+本轮没有增加新的底层模型表；以上公开 capability 全部映射到现有 `MODEL_CONFIG` 可调用 ID。Omni 10 秒 References **不开放**，Veo 3.1 Quality 的 Ingredients/References **不开放**；调用方不能靠图片张数让普通文生 capability 自动猜成另一种生成方式。Extend 仍是成功视频后的动作，不是普通可选 capability。
+
+影策/巨天的视频清晰度选择 `720P` 时，兼容层将其解释为**上游原生输出**，不会触发放大；空值、`native`、`720p`/`720P` 等价。`1080P`、`4K`、`2160P`、`480P` 未在本轮完成该兼容链真实验证，因此 `/v1/videos` 明确返回 `unsupported_video_parameters`，不会静默降档，也不会改选某个 upsample 模型。
 
 > **长视频边界**
 >
-> - 正式页面的单次时长上限为 10 秒；只有 Omni Flash 可选 8/10 秒，Veo 3.1 Lite/Fast/Quality 仍固定为 8 秒。
-> - 4 秒、6 秒不进入正式菜单；超过单次上限的工作流依赖成功视频旁的“续写此视频”动作。
-> - Extend 必须有页面内部保存的源标识；没有成功源视频时页面不会提供可提交的 Extend。
+> - 正式页面的单次时长上限为 10 秒；只有 `omni-flash` 文生视频可选 8/10 秒，其他本轮公开视频 capability 固定为 8 秒。
+> - Omni References 的 10 秒组合不进入正式目录；4 秒、6 秒也不进入本轮正式菜单。
+> - 超过单次上限的工作流仍依赖成功视频旁的“续写此视频”动作；没有成功源视频时页面不会提供可提交的 Extend。
 
 > **旧调用兼容**
 >
-> `MODEL_CONFIG` 与 resolver 仍接受已有 default、4s、6s、1080P/4K 及重复顺序别名。它们只是从发现目录和测试页隐藏，并未从请求路由中删除，因此旧客户端调用不会因本次目录收口突然失效。
+> `MODEL_CONFIG` 中已有的 legacy/default、4s、6s、派生清晰度及重复顺序别名没有被本轮删除；其他现有 resolver 也未重写。但影策/巨天使用的 `/v1/videos` 边界现在只接受目录明确允许的原生清晰度语义，不能再通过 `resolution_name` 触发未验证的 1080P/4K/2160P/480P 放大路径。
 
 ## 🎬 影策（Framefield Studio）兼容接入
 
@@ -233,7 +243,7 @@ Omni Flash 的当前正式 capability 是文生视频入口，上传限制为 0�
 
 显式 HTTP 媒体代理会使用固定公网 IP 的安全 CONNECT 隧道，TLS 仍按原始官方域名验证，并在 redirect 每一跳重新做 allowlist/DNS 检查；没有代理时继续使用 RESOLVE 固定解析。未实现的代理类型会 fail-closed，不会退回到代理端自行解析官方域名的不安全模式。
 
-视频参数仍受现有公开目录约束：Omni Flash 支持已验证的 8/10 秒，Veo 3.1 Lite/Fast/Quality 公开能力保持 8 秒；`resolution_name` 只有在现有 `MODEL_CONFIG` 已存在对应可调用分辨率模型时才会映射，其他情况会 fail-closed，不会临时拼一个未知模型。`preset` 作为兼容字段接受，但不会覆盖调用方明确选择的模型。
+视频参数严格受同一公开目录约束：调用方应直接选择上表的明确 capability；图片张数必须落在该 capability 的 `min_images`/`max_images` 范围内，否则在创建 task 前返回 `unsupported_video_parameters`。影策/巨天提交 `resolution_name=720P`（或 `720p` / `native` / 空值）时保持目录解析出的底层模型不变，按上游原生输出处理；`1080P`、`4K`、`2160P`、`480P` 明确拒绝。`preset` 仍作为兼容字段接受，但不会覆盖调用方明确选择的 capability。
 
 ## 📡 API 使用示例（需要使用流式）
 

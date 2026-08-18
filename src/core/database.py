@@ -14,6 +14,19 @@ from .models import Token, TokenStats, Task, RequestLog, AdminConfig, ProxyConfi
 
 
 _GOOGLE_COOKIES_ENVELOPE_PREFIX = "dpapi-user:v1:"
+_AUTH_STATES = {"ok", "refresh_pending", "backoff", "reauth_required"}
+_AUTH_ERROR_CLASSES = {
+    "",
+    "network",
+    "oauth_callback_missing",
+    "cookie_rejected",
+    "profile_missing",
+    "profile_corrupt",
+    "interactive_verification",
+    "browser_start_failed",
+    "browser_timeout",
+    "identity_mismatch",
+}
 
 
 class _WindowsCurrentUserDpapiProtector:
@@ -720,6 +733,11 @@ class Database:
                     ("refresh_interval_minutes", "INTEGER DEFAULT 120"),
                     ("last_st_refresh_at", "TIMESTAMP"),
                     ("last_st_refresh_result", "TEXT DEFAULT ''"),
+                    ("account_profile_key", "TEXT DEFAULT ''"),
+                    ("auth_state", "TEXT DEFAULT 'ok'"),
+                    ("auth_failure_count", "INTEGER DEFAULT 0"),
+                    ("auth_next_retry_at", "TIMESTAMP"),
+                    ("last_auth_error_class", "TEXT DEFAULT ''"),
                     ("ban_reason", "TEXT"),  # 禁用原因
                     ("banned_at", "TIMESTAMP"),  # 禁用时间
                 ]
@@ -928,6 +946,11 @@ class Database:
                     refresh_interval_minutes INTEGER DEFAULT 120,
                     last_st_refresh_at TIMESTAMP,
                     last_st_refresh_result TEXT DEFAULT '',
+                    account_profile_key TEXT DEFAULT '',
+                    auth_state TEXT DEFAULT 'ok',
+                    auth_failure_count INTEGER DEFAULT 0,
+                    auth_next_retry_at TIMESTAMP,
+                    last_auth_error_class TEXT DEFAULT '',
                     ban_reason TEXT,
                     banned_at TIMESTAMP
                 )
@@ -1239,8 +1262,10 @@ class Database:
                                    captcha_proxy_url, extension_route_key,
                                    protocol_mode, google_cookies, login_account, login_password,
                                    proxy_url, auto_refresh_enabled, refresh_interval_minutes,
-                                   last_st_refresh_at, last_st_refresh_result)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                   last_st_refresh_at, last_st_refresh_result,
+                                   account_profile_key, auth_state, auth_failure_count,
+                                   auth_next_retry_at, last_auth_error_class)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (token.st, token.at, token.at_expires, token.email, token.name, token.remark,
                   token.is_active, token.credits, token.user_paygate_tier,
                   token.current_project_id, token.current_project_name,
@@ -1250,7 +1275,9 @@ class Database:
                   token.protocol_mode, protected_google_cookies, token.login_account,
                   "", token.proxy_url, token.auto_refresh_enabled,
                   token.refresh_interval_minutes, token.last_st_refresh_at,
-                  token.last_st_refresh_result))
+                  token.last_st_refresh_result, token.account_profile_key,
+                  token.auth_state, token.auth_failure_count,
+                  token.auth_next_retry_at, token.last_auth_error_class))
             await db.commit()
             token_id = cursor.lastrowid
 
@@ -1375,6 +1402,12 @@ class Database:
                     t.is_active,
                     t.credits,
                     t.ban_reason,
+                    t.auth_state,
+                    t.auth_next_retry_at,
+                    CASE
+                        WHEN LENGTH(TRIM(COALESCE(t.account_profile_key, ''))) > 0 THEN 1
+                        ELSE 0
+                    END AS has_account_profile,
                     t.created_at,
                     COALESCE(SUM(
                         CASE
@@ -1392,6 +1425,9 @@ class Database:
                     t.is_active,
                     t.credits,
                     t.ban_reason,
+                    t.auth_state,
+                    t.auth_next_retry_at,
+                    t.account_profile_key,
                     t.created_at
                 ORDER BY t.created_at DESC, t.id DESC
                 LIMIT ? OFFSET ?
@@ -1418,7 +1454,13 @@ class Database:
             token_cursor = await db.execute("""
                 SELECT
                     COUNT(*) AS total_tokens,
-                    COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) AS active_tokens
+                    COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) AS active_tokens,
+                    COALESCE(SUM(
+                        CASE
+                            WHEN is_active = 1 AND auth_state = 'ok' THEN 1
+                            ELSE 0
+                        END
+                    ), 0) AS ready_tokens
                 FROM tokens
             """)
             token_row = await token_cursor.fetchone()
@@ -1441,6 +1483,7 @@ class Database:
             return {
                 "total_tokens": int(token_data.get("total_tokens") or 0),
                 "active_tokens": int(token_data.get("active_tokens") or 0),
+                "ready_tokens": int(token_data.get("ready_tokens") or 0),
                 "total_images": int(stats_data.get("total_images") or 0),
                 "total_videos": int(stats_data.get("total_videos") or 0),
                 "total_errors": int(stats_data.get("total_errors") or 0),
@@ -1475,6 +1518,118 @@ class Database:
             cursor = await db.execute("SELECT * FROM tokens WHERE is_active = 1 ORDER BY last_used_at ASC")
             rows = await cursor.fetchall()
             return [Token(**self._decode_token_row(row)) for row in rows]
+
+    async def get_auth_recovery_candidates(self, now: datetime) -> List[Token]:
+        """Return user-enabled accounts whose authentication recovery may run now."""
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT *
+                FROM tokens
+                WHERE is_active = 1
+                  AND auto_refresh_enabled = 1
+                  AND auth_state != 'reauth_required'
+                  AND (
+                    auth_state != 'backoff'
+                    OR auth_next_retry_at IS NULL
+                    OR julianday(auth_next_retry_at) <= julianday(?)
+                  )
+                ORDER BY last_st_refresh_at ASC, id ASC
+                """,
+                (now,),
+            )
+            rows = await cursor.fetchall()
+            return [Token(**self._decode_token_row(row)) for row in rows]
+
+    async def update_token_auth_state(
+        self,
+        token_id: int,
+        *,
+        state: str,
+        failure_count: int,
+        next_retry_at: Optional[datetime],
+        error_class: str,
+    ) -> None:
+        """Persist only allowlisted authentication recovery metadata."""
+        normalized_state = str(state or "").strip()
+        normalized_error_class = str(error_class or "").strip()
+        if normalized_state not in _AUTH_STATES:
+            raise ValueError("unsupported auth state")
+        if normalized_error_class not in _AUTH_ERROR_CLASSES:
+            raise ValueError("unsupported auth error class")
+        try:
+            normalized_failure_count = max(0, int(failure_count))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid auth failure count") from exc
+
+        await self.update_token(
+            token_id,
+            auth_state=normalized_state,
+            auth_failure_count=normalized_failure_count,
+            auth_next_retry_at=next_retry_at,
+            last_auth_error_class=normalized_error_class,
+        )
+
+    async def commit_account_reauth(
+        self,
+        token_id: int,
+        *,
+        st: str,
+        at: str,
+        at_expires: Optional[datetime],
+        google_cookies: str,
+        account_profile_key: str,
+    ) -> None:
+        """Commit one verified re-login as a single token-state transaction."""
+        profile_key = str(account_profile_key or "").strip()
+        if not profile_key:
+            raise ValueError("account profile key is required")
+
+        async with self._connect(write=True) as db:
+            try:
+                cursor = await db.execute(
+                    """
+                    UPDATE tokens
+                    SET st = ?,
+                        at = ?,
+                        at_expires = ?,
+                        protocol_mode = 'protocol',
+                        google_cookies = ?,
+                        account_profile_key = ?,
+                        auth_state = 'ok',
+                        auth_failure_count = 0,
+                        auth_next_retry_at = NULL,
+                        last_auth_error_class = '',
+                        last_st_refresh_at = CURRENT_TIMESTAMP,
+                        last_st_refresh_result = 'success',
+                        is_active = 1,
+                        ban_reason = NULL,
+                        banned_at = NULL
+                    WHERE id = ?
+                    """,
+                    (
+                        st,
+                        at,
+                        at_expires,
+                        self._protect_google_cookies(google_cookies),
+                        profile_key,
+                        token_id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError("token_not_found")
+                await db.execute(
+                    "UPDATE token_stats SET consecutive_error_count = 0 WHERE token_id = ?",
+                    (token_id,),
+                )
+                await db.commit()
+            except BaseException:
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
+                raise
 
     async def update_token(self, token_id: int, **kwargs):
         """Update token fields"""

@@ -138,14 +138,12 @@ class AccountOnboardingService:
             await self._finish(session_id, status=outcome, error_class=None)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            debug_logger.log_warning(
-                f"[AccountOnboarding] browser onboarding failed: {type(exc).__name__}"
-            )
+        except Exception:
+            debug_logger.log_warning("[AccountOnboarding] browser onboarding failed")
             await self._finish(
                 session_id,
                 status="failed",
-                error_class=type(exc).__name__,
+                error_class="failed",
             )
 
     async def _finish(self, session_id: str, *, status: str, error_class: Optional[str]) -> None:

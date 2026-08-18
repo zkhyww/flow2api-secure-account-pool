@@ -1,6 +1,6 @@
 # Flow2API Local Secure Account Pool — Milestone Report
 
-Updated: 2026-08-14
+Updated: 2026-08-16
 
 ## Conversation provenance
 
@@ -239,3 +239,266 @@ Updated: 2026-08-14
 - The final, 16th real video round completed through another available account slot after the controller temporarily disabled the preferred slot for that acceptance check. The temporary adjustment was then restored, and all 5 slots were enabled at completion.
 - No account identity is recorded here. This terminal documentation also does not record Cookie, Token, API Key, full Flow URL, prompt, media, or response body.
 - Latest full automated gate baseline for the terminal record is `427 passed` plus `190 subtests passed`; the older 425 count is obsolete.
+
+## Milestone 10 — Durable account session recovery
+
+> Author-review follow-up: the later Milestone 11 supersedes the Task 6 conclusions below that treated a fresh empty re-login candidate as the final contract and treated the launch-parallelism gate as proof of the maximum-10 live-browser limit. The Task 6 counts remain historical evidence for that earlier candidate.
+
+### Scope and plan/source corrections
+
+- This milestone is limited to durable account authentication recovery. The existing account pool, dense-pack behavior, learned concurrency, global browser cap, circuit breaker, media parsing and ordinary generation worker lifecycle remain the existing owners.
+- The implementation plan named a credential persistence test file that is not present in this checkout. The existing credential authority is `tests/test_batch4_credential_persistence.py`, so focused compatibility checks use that file instead of creating a parallel duplicate.
+- The personal browser service already owns the global browser launch gate. Persistent authentication recovery reuses that gate; no second semaphore or browser-count implementation was added.
+- The browser capture boundary returns private session state but not an authoritative account identity. Identity binding therefore stays at the existing ST-to-AT conversion boundary, which yields the account email used for fail-closed comparison before credentials are committed.
+- Explicit re-login uses a fresh candidate Profile instead of reopening the target account's old Profile. This is intentionally stricter than the initial plan: a user could otherwise sign the old Profile into a different account before identity verification. The candidate becomes the stored reference only after identity match, leaving the previous account state untouched on mismatch.
+- Protocol and personal-browser ST refreshes were also corrected to treat a new ST as an in-memory candidate. ST/AT are committed only after ST-to-AT identity verification; this closes the same overwrite window in background and foreground refresh paths without changing generation scheduling.
+
+### RED-to-GREEN evidence
+
+- Data model/migration RED proved the five authentication recovery fields and database APIs were absent; focused GREEN was `4 passed`.
+- Profile-store RED was an absent module; containment/restart/symlink contracts reached `5 passed, 9 subtests passed`.
+- Authentication-state RED reproduced permanent disable and manual-disable reversal; state-machine and existing credential/failure-routing checks reached `28 passed` in the focused combination.
+- Persistent-browser RED reproduced missing durable Profile support; browser and pluginless onboarding checks reached `30 passed`.
+- Recovery/onboarding/re-login/API/UI RED groups separately reproduced missing persistent recovery, missing Profile binding, missing re-login route, unstable public auth status and missing UI action. The Task 5 focused aggregate reached `66 passed, 49 subtests passed`.
+- Task 6 fresh baseline first confirmed the pre-existing recovery suite was `28 passed`, then exposed gaps not covered by that suite. The added deterministic REDs reproduced three account-refresh failures (`3 failed, 27 passed`): a background protocol ST candidate was written when ST-to-AT raised, current-AT validation logged raw exception text, and protocol-refresher shutdown logged raw exception text. Personal-browser REDs separately reproduced raw refresh/pool exception logging (`2 failed, 24 passed`); onboarding RED reproduced a runtime exception type escaping as public `error_class` (`1 failed, 9 passed`); the persistent-Profile-log/manual-refresh-API combination reproduced four privacy failures (`4 failed, 26 passed, 6 subtests passed`).
+- Task 6 minimal GREEN keeps protocol and personal ST values in memory until ST-to-AT identity verification, removes the background exception-path ST write, keeps persistent Profile paths redacted in lifecycle logs, maps onboarding failures to stable public status, and removes raw exception text from the authentication refresh logs/API paths covered by the REDs. The focused identity/privacy aggregate is `70 passed, 6 subtests passed`; scale plus existing browser-cap/credential/admin/UI regressions are `69 passed, 56 subtests passed`.
+
+### Durable recovery behavior
+
+- Each migrated account stores only an opaque Profile key in the database; the local Profile directory remains below the ignored `data/account_profiles/` root and is never returned by the account API or management UI.
+- `is_active` remains user intent. Authentication failures move through `refresh_pending`, bounded `backoff` or `reauth_required` metadata and do not call the permanent-disable path.
+- Automatic recovery follows existing protocol refresh first, then the account's persistent Profile when needed. A recovery browser is on-demand, reuses the existing global launch gate and is closed on success, failure and timeout.
+- Ordinary generation workers keep their temporary Profile behavior. Durable Profiles are authentication recovery sources only.
+- The public management surface is restricted to five stable states: 正常、等待自动恢复、稍后重试、需要重新登录、已停用. Internal Profile identifiers, paths and raw authentication errors are not public fields.
+- Upgraded pre-existing accounts need one explicit re-login each to establish a durable Profile. Same-machine, same-Windows-user restarts can then recover from that local state; another machine requires separate normal logins rather than Profile copying.
+
+### Task 6 final automatic gates
+
+- Exact-candidate full pytest: `484 passed, 209 subtests passed`; repeated final-state runs kept the same counts, with one existing non-failing `curl_cffi` Windows Proactor compatibility warning and zero test failures or errors.
+- `venv/Scripts/python.exe -m compileall -q src tests scripts main.py`: PASS with no output.
+- `git diff --check`: PASS with no output.
+- Count-only live-tree privacy scan: `files_scanned=159`, `forbidden_path_count=4`, `secret_pattern_count=0`. The scanner intentionally exits non-zero on the live worktree because runtime-only paths are present; they were not opened or removed. Git tracking checks report `profile_tracked_count=0`, `runtime_sensitive_tracked_count=0`, and the persistent Profile root is ignored.
+- `docs/USER_GUIDE_ZH.md` now states that same-machine durable recovery backup requires the stopped-service pair `data/flow.db` plus the complete `data/account_profiles/` root; this pair is not a cross-machine migration format and must not enter Git, delivery ZIPs, logs or public reports. `docs/FORK_DIFFERENCES_ZH.md` records the identity-before-commit and stable-error privacy boundaries.
+- No commit, push, deploy, service restart, real database read, real browser login, real account operation or paid generation was performed by this Task 6 lane.
+
+### Unverified real-world acceptance
+
+- No real account, credential, Profile content, live database, running service, Google login, CAPTCHA, Passkey, two-step verification or paid generation was used in this milestone.
+- Controller/Codex acceptance still needs one normal existing-account re-login, a same-machine service restart recovery, an expired-session automatic recovery, a forced transient refresh failure that remains retryable, an identity-mismatch fail-closed check using controlled accounts, and confirmation that all opened recovery browsers close afterward while the global browser count remains bounded.
+
+## Milestone 11 — Re-login Profile reuse and live browser-process cap review
+
+### Fresh review findings
+
+- Fresh source review confirmed the design required explicit re-login to reuse the target account's existing Profile state, while the Task 6 implementation always created a new empty candidate and its API test encoded that drift as a contract.
+- Fresh source review also confirmed the existing global semaphore covered only the `initialize()` startup region. After successful initialization it was released even though the browser remained alive; the ordinary pool separately capped configured workers at 10, but direct onboarding/re-login/recovery instances could exist outside that worker list. The earlier scale test proved only configuration clamping, not a mixed live-process ceiling.
+
+### RED-to-GREEN evidence
+
+- Profile/re-login RED: `6 failed, 6 passed, 9 subtests passed`. The failures proved the store lacked safe clone/remove operations, successful re-login did not inherit the previous Profile state, and failed/mismatched re-login left candidate directories behind.
+- Live-process RED: `6 failed, 4 passed, 4 subtests passed`. Deterministic synthetic browser starts proved an 11th instance could enter the real browser-start boundary while 10 instances were still live. The same gap reproduced after start failure, start timeout, cancellation, a shutdown-cleanup exception, and in a mixed ordinary personal-pool plus recovery-instance scenario.
+- Minimal Profile GREEN adds contained clone/remove operations. Explicit re-login clones an existing Profile to an isolated candidate, opens only that candidate, retains the existing ST-to-AT identity-before-commit boundary, switches the stored Profile reference only on identity match, removes the superseded Profile after success, and removes the candidate on failure. An account with no usable existing Profile starts from an empty candidate.
+- A follow-up post-write RED then exposed one remaining fail-closed gap: the old implementation wrote candidate credentials/Profile reference before separate auth-success/enable calls, so a later exception could leave the database pointing at a candidate that the outer failure path deleted. The direct reauth RED was `1 failed, 4 passed`; after removing duplicate inherited DB fixtures, the focused atomicity RED was `3 failed, 34 passed`.
+- Minimal atomic GREEN adds `Database.commit_account_reauth()`: verified credentials, Profile reference, auth-success metadata, explicit enable state and consecutive-error reset are committed in one SQLite transaction. A failure during a later statement explicitly rolls the transaction back, so the old Profile reference remains authoritative and the candidate can be safely cleaned. The ST-to-AT identity check still occurs before this transaction, and there is no asynchronous post-commit state step. Atomic focused GREEN is `45 passed`.
+- Cleanup durability RED then reproduced a temporary filesystem-lock failure: `1 failed, 8 passed, 9 subtests passed`. Minimal GREEN writes a Profile-root cleanup marker containing only the opaque key before deletion; a blocked delete stays tracked and is retried on the next candidate creation, while Store construction alone performs no cleanup. The Profile-store GREEN is `9 passed, 9 subtests passed`, and the widened account/profile/browser/docs regression is `114 passed, 29 subtests passed`.
+- Minimal browser GREEN keeps the existing startup-parallelism semaphore unchanged and adds one fixed maximum-10 live-process lease shared by every `BrowserCaptchaService` instance. The lease is acquired before entering browser startup, retained after successful initialization, released by shutdown `finally`, and also released after launch failure, timeout, cancellation, or shutdown-cleanup failure. The ordinary pool scheduler, dense-pack behavior, learned concurrency, circuit breaker and worker semantics are unchanged.
+- Earlier GREEN checkpoints remain useful regression evidence: first combined Profile/live-cap GREEN was `22 passed, 13 subtests passed`; the earlier wider account/profile/browser recovery regression was `100 passed, 19 subtests passed`; tightened live-cap plus documentation contracts were `20 passed, 14 subtests passed`.
+
+### Final automatic gates for the reviewed candidate
+
+- Full pytest after the atomic reauth and cleanup-durability follow-ups: `497 passed, 209 subtests passed` with the existing non-failing Windows `curl_cffi` compatibility warning only. The increase from the fresh 484 baseline is exactly thirteen new regression tests: nine Profile/live-cap contracts, three post-write/transaction atomicity contracts, and one durable cleanup-marker contract.
+- `compileall -q src tests scripts main.py`: PASS with no output.
+- `git diff --check`: PASS with no output.
+- Count-only live-tree scanner: `files_scanned=159`, `forbidden_path_count=4`, `secret_pattern_count=0`. The non-zero scanner exit remains intentional for the live working tree because runtime-only forbidden paths still exist; their contents were not opened or removed.
+
+### Remaining real acceptance
+
+- No real account, credential, Profile content, browser login, running service, database content or paid generation was used in this review. Real acceptance still needs a controlled existing-account re-login that proves prior login state is actually reused, identity mismatch remains fail-closed, same-machine restart/expiry recovery works, and the process count never exceeds 10 while ordinary workers and recovery browsers overlap. No blind paid retry is permitted.
+
+## Milestone 12 — Onboarding candidate cleanup and atomic Profile binding
+
+### Independent QC finding and RED
+
+- Codex review found that the native onboarding launcher created a persistent candidate Profile before browser capture but only closed the browser in `finally`. A capture exception or persistence exception therefore left an unreferenced Profile directory behind.
+- Two filesystem-backed regression tests reproduced the gap: capture failure and persistence failure both left the candidate directory present (`2 failed, 10 deselected`).
+- The same review found a related ordering risk for both new and existing-account imports. A Profile key could be written before all remaining persistence steps completed, while the launcher treated any raised exception as permission to delete the candidate.
+
+### Minimal GREEN
+
+- The launcher now retains a candidate only after persistence returns successfully. Browser close runs first in the cleanup path; every unsuccessful candidate is then passed to the existing contained Profile-store cleanup boundary, including its durable opaque-key retry marker.
+- A new-account import now finishes the existing token/project creation workflow without a Profile reference and binds the Profile key only after that workflow returns successfully. A partial add can therefore no longer leave the database pointing at a candidate removed by the launcher.
+- An existing-account import now writes credentials, Profile reference and authentication-success metadata in one database update and performs no asynchronous post-write authentication step. The account's existing enabled/disabled intent remains unchanged.
+- Focused onboarding and persistence regression: `20 passed`. Fresh exact-candidate full pytest after all source and test edits: `499 passed, 209 subtests passed`, with the same single non-failing Windows `curl_cffi` compatibility warning.
+- No service switch, real database/Profile read, real login, account operation, commit, push, deployment or paid generation was performed by this QC closure.
+
+## Milestone 13 — Long-running re-login browser launch recovery
+
+### Fresh root-cause investigation
+
+- The long-running personal-browser pool is configured for the existing maximum of 10 workers. The live-process cap is a class-level semaphore whose lease is intentionally retained after a successful browser start and normally released by managed shutdown.
+- A deterministic lifecycle gap existed after an already-started worker browser died asynchronously. `shutdown_idle_runtime_if_needed()` returned immediately when the nodriver browser reported `stopped` or disconnected, before the existing managed-shutdown `finally` could release the still-held live-process lease. The per-worker idle reaper continued calling that method, so repeated dead workers could accumulate logical "live" leases even when no Chrome process remained and eventually prevent a new re-login browser from reaching `nodriver.start`.
+- The explicit re-login path also destroyed the evidence needed to diagnose a historical failure. `capture_account_onboarding_result()` includes browser initialization, opening the onboarding window and session capture, but `_run_account_reauth()` mapped every non-timeout exception from that whole call to `browser_start_failed`. A later `close()` exception could additionally replace an earlier interactive timeout. Therefore the exact exception behind the already-recorded historical `browser_start_failed` cannot be reconstructed from the stored state alone.
+- Safe environment checks found no configured personal/request proxy value and no Windows desktop-session split for the running service. No proxy value, account value, credential, Profile content or raw response was read or emitted.
+
+### RED-to-GREEN evidence
+
+- The final deterministic RED was `3 failed, 15 passed, 4 subtests passed`. The three failures proved: a stopped browser kept its live-process lease after idle cleanup; a post-start capture exception was still stored as `browser_start_failed`; and a close exception overrode an earlier interactive timeout.
+- Minimal lease GREEN re-checks a held lease under the existing browser lifecycle lock. If the browser is still absent, stopped or marked disconnected after that lock is obtained, it runs the existing managed shutdown path, which releases the existing global lease in its established `finally`. If initialization is merely still in progress, the lock wait and re-check prevent a premature release. No second semaphore, retry loop or process-count mechanism was added.
+- Minimal re-login GREEN makes browser initialization an explicit first stage. Only that stage maps to `browser_start_failed`; a later non-timeout onboarding/capture exception remains transient and maps to the existing `network` backoff class, while `TimeoutError` remains `interactive_verification`. Cleanup runs afterward, and a close failure is recorded as a secondary failure without replacing an already-established primary result.
+- Re-login diagnostics log only `stage`, stable `error_class` and `exception_type`. Raw exception text is never added by this boundary, so the diagnostic record cannot expose Cookie/Token/API key, Profile path, account identity, proxy, full URL or raw upstream response.
+- RED target after GREEN: `18 passed, 4 subtests passed`. Wider account-recovery/browser-lifecycle/onboarding/Profile regression: `117 passed, 13 subtests passed`.
+
+### Final automatic gates
+
+- Fresh exact-candidate full pytest: `502 passed, 209 subtests passed`, with the existing single non-failing Windows `curl_cffi` Proactor compatibility warning. The increase from Milestone 12 is exactly the three new regression contracts above.
+- `python -m compileall -q src tests scripts main.py`: PASS.
+- `git diff --check`: PASS; Git emitted only existing working-copy LF-to-CRLF conversion warnings.
+- Count-only live-tree scanner: `files_scanned=159`, `forbidden_path_count=5`, `secret_pattern_count=0`. The scanner still exits non-zero by design for forbidden runtime paths in the live worktree. The count is one higher than Milestone 12's recorded live-tree count; those runtime objects were not opened, deleted or modified by this repair lane.
+- Files changed by this milestone are limited to `src/api/admin.py`, `src/services/browser_captcha_personal.py`, `tests/test_account_reauth_api.py`, `tests/test_account_session_recovery_scale.py`, and this report. Existing dirty candidate files outside these hunks were preserved.
+- No commit, push, package, deployment, service restart, real browser login, real account retry, Profile-content inspection or paid generation was performed.
+
+### Remaining controlled real validation
+
+- A controller should perform one deliberate existing-account re-login against the long-running candidate service. The acceptance signal is that the dedicated headed browser reaches the login window; if it still fails, the new value-free diagnostic must identify whether the failure stage is `initialize`, `capture` or `close` and report only the exception type.
+- A controlled long-running lifecycle check should also allow a personal worker browser to terminate, wait for the existing idle reaper, and confirm a later re-login can acquire the shared live-process capacity without blind retries. The global maximum must remain 10 throughout.
+
+### Controller real-runtime acceptance — 2026-08-17
+
+- Codex independently repeated the final candidate gates before switching the local service: focused re-login/lifecycle tests were `18 passed, 4 subtests passed`; full pytest was `502 passed, 209 subtests passed`; compileall and `git diff --check` passed; the count-only live-tree scan remained `files_scanned=159`, `forbidden_path_count=5`, `secret_pattern_count=0`.
+- The running port-8000 service was replaced with this worktree while preserving the existing data junction. The replacement service returned HTTP 200 from `/health`.
+- Safe aggregate inspection found five pre-upgrade accounts and no established persistent account Profile. Four accounts were temporarily enabled one at a time for protocol refresh checks and were restored to their original disabled state afterward; the previously enabled acceptance account remained enabled. No account identity or credential value was recorded.
+- Every protocol refresh check failed, so no account could recover unattended from the pre-upgrade credentials. A real image request was then attempted once and returned no media because no authenticated account slot was available. No blind retry and no real video request followed.
+- One deliberate explicit re-login did reach a dedicated visible Chrome window: total Chrome process/window counts changed from `48/1` before the call to `57/2` while the call was active. The call later returned a retryable result and the database stored `auth_state=backoff`, `last_auth_error_class=network`, and no Profile; it did not regress to `browser_start_failed`.
+- Cleanup acceptance passed: after the failed re-login/refresh checks, total Chrome counts returned to `48/1`, the count of Chrome processes whose command line belonged to Flow2API runtime/Profile paths was `0`, and the service remained healthy. Counts include unrelated user Chrome processes; only the Flow2API-owned count is the cleanup authority.
+- Full same-machine restart recovery, real image generation, real Omni Flash video generation, ordinary generation-worker idle-TTL wake/reclaim, and Windows shutdown remain blocked on one normal manual Google login per pre-upgrade account. The machine was intentionally not shut down because the user's real-generation acceptance condition was not met.
+
+## Milestone 14 — Re-login refresh-clock and healthy-AT recovery guard
+
+### Fresh source verification
+
+- New controller evidence reported that all five accounts had completed explicit re-login and had persistent Profile, ST, AT and Google Cookies, yet three accounts were changed back to `reauth_required` within minutes with stable `interactive_verification` / `protocol_refresh_failed` metadata while their AT expiry remained comfortably beyond the one-hour refresh boundary. This repair lane did not read the live database, credential values, Profile contents, account identities or proxy values.
+- Fresh source review confirmed that `Database.commit_account_reauth()` atomically wrote verified credentials, Profile reference and `auth_state='ok'` but did not update `last_st_refresh_at` or `last_st_refresh_result`. `run_protocol_refresh_once()` runs from the existing 60-second loop and treats a missing/old `last_st_refresh_at` as due under the existing per-account/default refresh interval.
+- Fresh source review also confirmed that `_refresh_protocol_token()` unconditionally invoked `_try_persistent_profile_recovery()` whenever protocol ST refresh returned no candidate. A 45-second Profile capture timeout then marks `interactive_verification` with `interactive=True`, which promotes the account to `reauth_required` even when the currently stored AT is still clearly usable for more than one hour.
+- The management page refresh path is read-only with respect to authentication refresh: `DOMContentLoaded` calls `refreshTokens()`, which loads `/api/tokens` and stats. `/refresh-at` is invoked only by the explicit AT-refresh action, so an ordinary page reload was not the state transition source.
+
+### RED-to-GREEN evidence
+
+- Four focused contracts were added before production changes. RED was `3 failed, 1 passed, 3 subtests passed`: reauth did not refresh the ST-success clock, an immediate protocol-refresh tick therefore called `_refresh_protocol_token`, and a failed protocol ST refresh drove a healthy two-hour AT into interactive Profile recovery. The preservation contract already passed for AT missing, expiry unknown and expiry below one hour, proving the existing fail-closed recovery chain for genuinely at-risk AT state.
+- Minimal transaction GREEN adds `last_st_refresh_at = CURRENT_TIMESTAMP` and `last_st_refresh_result = 'success'` to the existing `commit_account_reauth()` UPDATE. These values now commit or roll back with the verified ST/AT, Profile reference, auth-success state and explicit enable state; no post-commit refresh marker write was added.
+- Minimal protocol-refresh GREEN re-reads the token after a failed protocol ST attempt and reuses the existing `_should_refresh_at()` authority. If the fresh token still has an AT with at least the existing one-hour safety margin, the background refresher preserves credentials and auth state and leaves the stable `protocol_refresh_failed` result for diagnostics. If AT is absent, expiry is unknown, or remaining lifetime is below one hour, the existing persistent-Profile recovery path still runs unchanged and remains fail-closed.
+- The four new contracts are GREEN at `4 passed, 3 subtests passed`. The widened reauth/auth-state/Profile/onboarding recovery set is `67 passed, 18 subtests passed`.
+
+### Automatic gates
+
+- Fresh full pytest after the production/test changes: `506 passed, 212 subtests passed`, with the same single non-failing Windows `curl_cffi` Proactor compatibility warning. The increase from the 502/209 baseline is exactly four new tests and three subtests from this milestone.
+- `python -m compileall -q src tests scripts main.py`: PASS.
+- `git diff --check`: PASS; only existing working-copy LF-to-CRLF warnings were emitted.
+- Count-only live-tree scanner: `files_scanned=159`, `forbidden_path_count=5`, `secret_pattern_count=0`. The scanner still exits non-zero for the known live runtime paths; their contents were not read, changed or removed.
+- This milestone changes only the relevant hunks in `src/core/database.py`, `src/services/token_manager.py`, `tests/test_account_session_recovery.py`, plus this report. Existing dirty and untracked candidate material is preserved.
+- No live `flow.db` read or mutation, credential/Profile inspection, port-8000 restart/switch, real generation, commit, push or deployment was performed by this lane.
+
+### Remaining controlled real validation
+
+- Codex still needs to switch/restart the service only when explicitly authorized so the running process loads this candidate, then verify that recently re-logged accounts remain `正常` across several 60-second protocol-refresher ticks and ordinary management-page reloads.
+- Controlled acceptance should also force or observe one protocol ST refresh failure while the current AT has more than one hour remaining and confirm the account stays usable without opening an interactive recovery browser; a separate near-expiry/unknown-expiry case should confirm the existing Profile recovery path still activates.
+- Real image/video generation remains a separate acceptance gate and must not be used as a blind retry mechanism for authentication recovery.
+
+## Milestone 15 — Healthy-AT validation repairs historical auth-state false positives
+
+### Fresh source verification and controller evidence boundary
+
+- Controller acceptance after Milestone 14 reported three accounts still carrying historical `reauth_required` / `interactive_verification` metadata created by the old code even though their stored AT remained beyond the one-hour safety boundary. Two were returned to `ok` through the existing explicit AT-refresh path. A final account entered the full recovery chain and timed out, so blind retries and direct database edits were explicitly prohibited. This repair lane did not read or mutate the live database, account values, credentials or Profile contents.
+- Fresh source review confirmed the remaining same-root boundary in `TokenManager.ensure_valid_token()`: when `_should_refresh_at()` is false, a successful upstream `get_credits` proves the current AT is usable, but the success branch previously updated only credits plus the in-memory AT validation cache and returned without clearing historical auth failure metadata.
+- Fresh call-chain review confirmed the existing admin `refresh-credits` action already calls `TokenManager.refresh_credits()`, which calls production `ensure_valid_token()` before the balance refresh. No endpoint, button or background task is needed for this repair.
+
+### RED-to-GREEN evidence
+
+- The focused RED was `1 failed, 2 passed, 35 deselected`. The failing contract proved that a token with AT lifetime above one hour, historical `reauth_required` / `interactive_verification`, and `last_st_refresh_result='protocol_refresh_failed'` remained falsely marked after a successful production `ensure_valid_token()` / `get_credits` validation. The two passing protection contracts proved a failed upstream validation followed by failed refresh does not fake auth success, and an already-clean `ok` account does not need an auth-success rewrite.
+- Minimal GREEN changes only the successful upstream-validation branch. After credits are persisted, it re-reads the token and calls the existing `_mark_auth_success()` only when the fresh auth metadata is not clean `ok` (`auth_state`, failure count, retry deadline or stable auth error class). A clean account performs no extra auth-state write.
+- `_mark_auth_success()` intentionally does not touch ST-refresh history, so `last_st_refresh_result='protocol_refresh_failed'` remains available as historical diagnostics rather than being forged to `success`.
+- Focused GREEN is `3 passed, 35 deselected`; widened account-session/auth-status/reauth regression is `48 passed, 9 subtests passed`.
+
+### Automatic gates
+
+- Fresh full pytest after the production/test changes: `508 passed, 212 subtests passed`, with the existing single non-failing Windows `curl_cffi` Proactor compatibility warning. The increase from the Milestone 14 baseline is exactly two net new tests because one prior validation-failure test was expanded into three contracts.
+- `python -m compileall -q src tests scripts main.py`: PASS.
+- `git diff --check`: PASS; only the existing working-copy LF-to-CRLF warnings were emitted.
+- Count-only live-tree scanner remains `files_scanned=159`, `forbidden_path_count=5`, `secret_pattern_count=0`; the non-zero exit is still due to known live runtime paths whose contents were not read, changed or removed.
+- This milestone changes only the relevant hunk in `src/services/token_manager.py`, the focused contracts in `tests/test_account_session_recovery.py`, and this report. Existing dirty/untracked candidate material is preserved.
+- No service restart/switch, live account operation, real API call, live database mutation, Profile inspection, generation, commit, push or deployment was performed by this lane.
+
+### Controlled recovery for the final historical false positive
+
+- After an authorized service switch loads this candidate, Codex can make exactly one controlled use of the existing `refresh-credits` action for the remaining historical false-positive account. Because `refresh_credits()` enters `ensure_valid_token()` first, a successful current-AT `get_credits` validation will clear only the stale auth failure metadata to `ok` and return a usable token while preserving `last_st_refresh_result='protocol_refresh_failed'`.
+- If that upstream validation fails, the new code does not mark the account `ok`; the existing refresh/recovery path retains authority and a failed chain remains failed. Do not repeat the action blindly and do not edit the database manually.
+
+### Controller real-runtime acceptance — final candidate
+
+- Codex independently verified the final working tree at `508 passed, 212 subtests passed`; `compileall` PASS; `git diff --check` PASS; count-only scanner `files_scanned=159`, `forbidden_path_count=5`, `secret_pattern_count=0`.
+- The service was controllably restarted from the unique worktree and loaded the final candidate; `/health` returned HTTP 200.
+- Three accounts still carried historical `reauth_required` state created by the old code. The existing explicit AT-refresh path returned two to `ok`. The third entered the full forced refresh/recovery chain, failed, and correctly remained non-`ok` rather than being falsely marked healthy.
+- After the healthy-AT self-repair patch was loaded, Codex performed exactly one existing `refresh-credits` / `ensure_valid_token` validation for that remaining account. Its upstream AT validation and subsequent recovery chain both failed, so it correctly remained `reauth_required`; this now represents a genuine need for interactive re-login and no further blind retry was performed.
+- The other four accounts remained `正常` across two complete 60-second background refresh periods and two ordinary management-page reloads. The prior symptom where multiple accounts fell back to re-login after a page refresh did not recur.
+- After recovery attempts completed, the Flow2API-owned Chrome process count returned to 0 and the service still returned HTTP 200 from `/health`.
+- Codex removed only the zero-byte untracked `0)` file created by its own failed diagnostic escaping. No other runtime or dirty file was deleted; the count-only scanner remained `159/5/0`.
+- No paid generation, commit, push or deployment was performed in this acceptance. Four accounts are currently usable; the remaining account requires one real interactive login through the existing “重新登录并启用” flow.
+
+## Milestone 16 — 影策视频能力拆分与真实生成验收（2026-08-17）
+
+### 网页工程 lane
+
+- 当前 active URL：`https://chatgpt.com/c/6a8314b9-17e0-83e9-b49b-c1d0d6b28e86`（普通聊天，GPT-5.6 Sol 极高 + DevSpace办公）。
+- 旧 URL：`https://chatgpt.com/c/6a830f8b-ec50-83ee-a302-e6e0652c9e40`，仅作为 superseded evidence 保留，不再写入。
+
+### 本轮实现
+
+- 公开目录把 Omni Flash 与 Veo 3.1 的文生、首帧、首尾帧和 References 拆成独立入口；公开能力 ID 不再依靠图片数量猜测生成方式。
+- 旧内部模型 ID 继续兼容；真实上游模型 ID 仍只存在于兼容映射，不暴露给调用方。
+- 显式入口严格校验参考图数量。720P/native/空值沿用上游原生清晰度；不支持的 1080P、4K、2160P、480P 明确拒绝，不静默降档。
+- 测试页展示每个入口的用途、图片数量和生成方式。
+
+### 自动门禁
+
+- 网页工程 lane full pytest：`519 passed, 296 subtests passed`。
+- Codex 独立最终 full pytest：`519 passed, 1 warning, 296 subtests passed`，耗时 89.81 秒；此前同一候选也曾以 138.75 秒完成同结果复验。
+- `python -m compileall -q src tests scripts main.py`：PASS。
+- `git diff --check`：PASS；仅有两个既有工作区 LF→CRLF 提示。
+
+### Codex 真实运行验收
+
+- 使用隔离端口 8002 并行提交五项真实请求，统一为 8 秒、16:9、720P；只使用公开测试素材，不读取或输出账号、Cookie、Token、API Key、任务 ID、媒体 URL 或响应正文。
+- Omni References：completed，取得 `video/mp4`，1,966,948 bytes。
+- Veo Fast 文生：completed，取得 `video/mp4`，4,981,906 bytes。
+- Veo Fast 首帧：completed，取得 `video/mp4`，4,088,297 bytes。
+- Veo Fast 首尾帧：completed，取得 `video/mp4`，2,673,963 bytes。
+- Veo Fast References：completed，取得 `video/mp4`，3,405,734 bytes。
+- 首次空 502 已定位为测试客户端错误继承系统代理，导致 localhost 请求未到达 Flow2API；设置测试客户端不继承系统代理后，8002 `/docs` 返回 200，随后五项真实生成全部通过。该问题不是模型、账号登录态或本轮映射失败。
+- 临时 8002 服务已关闭并确认无监听。
+
+### 当前运行与交付状态
+
+- 正式 8000 服务仍是 2026-08-17 15:10 启动的旧进程，早于本轮适配器与目录代码修改时间；必须重启一次才能加载本轮新代码。
+- 本轮代码仍是本地 dirty 修改：未提交、未推送、未创建 PR、未部署。
+
+## Milestone 17 — 持久 Profile 会话自恢复闭环（2026-08-18）
+
+### 根因与最小修复
+
+- 短期重启后账号仍可生成，但强制执行凭证过期后的持久 Profile 恢复时，真实探针进入 `interactive_verification`；安全检查确认该 Profile 的 Cookie 数据库没有 Flow session cookie，因此旧实现只能依赖数据库中尚未过期的 ST/AT，无法覆盖隔天恢复。
+- 最小验证证明：从数据库中已受保护的 Google Cookie 备份里排除旧 Flow session cookie，只把 Google 登录 Cookie 注入该账号的持久 Profile，可自动换取新的 Flow session，并通过账号身份一致性校验。
+- 正式实现让 `TokenManager` 在持久 Profile 恢复时传入该账号的 Google Cookie 备份；浏览器恢复入口显式过滤 `__Secure-next-auth.session-token` 与 `next-auth.session-token`，避免复用旧会话，只用 Google 登录态引导新会话。注入失败时仍保留原 Profile 自恢复路径并 fail-closed。
+
+### RED→GREEN 与真实验收
+
+- 两项新增回归先分别以“未知参数”和“恢复链未传 Cookie 备份”失败，随后最小实现使两项均通过。
+- 真实强制恢复成功：候选账号由 backoff 自动恢复为 `auth_state=ok`，失败计数归零且没有残留认证错误；无需人工重新登录。
+- 服务正常关闭时确认 8000 监听归零且 Flow2API 托管浏览器进程归零；重启后同一账号仍为唯一可生成账号。
+- 重启后的真实图片生成返回 HTTP 200 且包含媒体；随后真实 Omni Flash 10 秒视频生成返回 HTTP 200 且包含媒体。
+
+### 最终门禁
+
+- 完整 pytest：`528 passed, 1 warning, 300 subtests passed`；唯一 warning 为既有 Windows `curl_cffi` Proactor 兼容提示。
+- `python -m compileall -q src tests scripts`：PASS。
+- `git diff --check`：PASS；仅有既有 LF→CRLF 工作区提示。
+- 安全扫描：`files_scanned=161`、`forbidden_path_count=5`、`secret_pattern_count=0`。5 个禁止路径均为既有本机运行态边界，不进入交付；未读取或输出凭据值。
+- 正式 8000 服务已由当前候选重新启动并保持监听，可继续用于本机验收。

@@ -25,6 +25,8 @@ ACCOUNT_PUBLIC_FIELDS = {
     "display_name",
     "is_active",
     "auth_status",
+    "auth_retry_after_seconds",
+    "can_reauth",
     "status",
     "error_class",
     "credits",
@@ -388,7 +390,9 @@ class Batch5AdminObservabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.token_id, item["id"])
         self.assertEqual("account-alpha", item["display_name"])
         self.assertFalse(item["is_active"])
-        self.assertEqual("authentication_failed", item["auth_status"])
+        self.assertEqual("已停用", item["auth_status"])
+        self.assertEqual(0, item["auth_retry_after_seconds"])
+        self.assertFalse(item["can_reauth"])
         self.assertEqual("ok", item["status"])
         self.assertIsNone(item["error_class"])
         self.assertEqual(7, item["credits"])

@@ -55,6 +55,13 @@ class Token(BaseModel):
     last_st_refresh_at: Optional[datetime] = None
     last_st_refresh_result: str = ""
 
+    # 认证恢复状态（不改变用户启停意图）
+    account_profile_key: str = ""
+    auth_state: Literal["ok", "refresh_pending", "backoff", "reauth_required"] = "ok"
+    auth_failure_count: int = 0
+    auth_next_retry_at: Optional[datetime] = None
+    last_auth_error_class: str = ""
+
     # 429禁用相关
     ban_reason: Optional[str] = None  # 禁用原因: "429_rate_limit" 或 None
     banned_at: Optional[datetime] = None  # 禁用时间

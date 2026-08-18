@@ -256,7 +256,8 @@ class AdminTestCapabilityApiTests(unittest.IsolatedAsyncioTestCase):
                             "name": "Primary",
                             "remark": "not-returned",
                             "is_active": True,
-                            "ban_reason": "",
+                            "auth_state": "ok",
+                            "has_account_profile": True,
                             "credits": 7,
                             "image_concurrency": 2,
                             "browser_in_use": True,
@@ -266,7 +267,8 @@ class AdminTestCapabilityApiTests(unittest.IsolatedAsyncioTestCase):
                             "name": "",
                             "remark": "Backup",
                             "is_active": False,
-                            "ban_reason": "authentication failed",
+                            "auth_state": "reauth_required",
+                            "has_account_profile": False,
                             "credits": 99,
                         },
                     ],
@@ -292,8 +294,8 @@ class AdminTestCapabilityApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({"items"}, set(payload))
         self.assertEqual(
             [
-                {"id": 23, "display_name": "Primary", "auth_status": "active"},
-                {"id": 24, "display_name": "Backup", "auth_status": "authentication_failed"},
+                {"id": 23, "display_name": "Primary", "auth_status": "正常"},
+                {"id": 24, "display_name": "Backup", "auth_status": "已停用"},
             ],
             payload["items"],
         )
