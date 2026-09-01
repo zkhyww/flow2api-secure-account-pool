@@ -272,7 +272,8 @@ class AccountReauthTests(unittest.IsolatedAsyncioTestCase):
                         "access_token": "fixture",
                         "user": {"email": "expected@example.invalid"},
                     }
-                )
+                ),
+                get_credits=AsyncMock(return_value={"credits": 100}),
             ),
             update_token=AsyncMock(side_effect=legacy_update_token),
             _mark_auth_success=AsyncMock(

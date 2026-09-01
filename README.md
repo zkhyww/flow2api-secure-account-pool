@@ -3,7 +3,7 @@
 <div align="center">
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/fastapi-0.119.0-green.svg)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/docker-supported-blue.svg)](https://www.docker.com/)
 
@@ -19,6 +19,21 @@
 - [本地增强版与上游差异](docs/FORK_DIFFERENCES_ZH.md)：哪些是本地补丁、明确边界，以及后续同步 upstream 的建议流程。
 
 > 本次交付以 Windows 本地优先；Zeabur/生产部署不在本次范围。不要把 API Key、账号凭据、完整上游媒体地址或原始提示词写进 URL、文档或日志。
+
+### Windows 新电脑最快用法
+
+1. 安装 **Python 3.11 或更高版本（64 位）** 和最新版 Google Chrome；安装 Python 时勾选 `Add Python to PATH`。
+2. 从本仓库下载 ZIP 并完整解压，或执行：
+
+   ```powershell
+   git clone https://github.com/zkhyww/flow2api-secure-account-pool.git
+   cd flow2api-secure-account-pool
+   ```
+
+3. 双击根目录的 `start-flow2api.cmd`。第一次会自动创建 `venv`、安装 `requirements.txt` 并启动服务；依赖安装所需时间取决于网络。以后再次双击只会复用环境和已有服务。
+4. 浏览器打开 `http://127.0.0.1:8000/manage`，首次使用上游默认账号 `admin` / `admin` 登录并立即改密码，然后在这台电脑上逐个添加 Google 账号。
+
+数据库会在首次启动时自动创建，不需要手工安装或从别的电脑复制。Git 仓库故意不包含 `data/`、数据库、Google Cookie、账号 Profile、API Key 和本机配置；这些数据涉及凭据且部分受 Windows 用户保护，**每台电脑都必须分别登录一次**。详见[中文使用说明](docs/USER_GUIDE_ZH.md)。
 
 ## ❤️赞助商
 
@@ -86,8 +101,8 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/TheSmallHanCat/flow2api.git
-cd flow2api
+git clone https://github.com/zkhyww/flow2api-secure-account-pool.git
+cd flow2api-secure-account-pool
 
 # 启动服务
 docker-compose up -d
@@ -126,12 +141,20 @@ docker compose -f docker-compose.headed.yml logs -f
 - API 端口：`8000`
 - 进入管理后台后，将验证码方式设为 `browser` 或 `personal`
 
-### 方式二：本地部署
+### 方式二：Windows 本地部署（本增强版推荐）
 
 ```bash
 # 克隆项目
-git clone https://github.com/TheSmallHanCat/flow2api.git
-cd flow2api
+git clone https://github.com/zkhyww/flow2api-secure-account-pool.git
+cd flow2api-secure-account-pool
+
+# Windows：双击 start-flow2api.cmd，或在命令行运行
+start-flow2api.cmd
+```
+
+首次启动会自动创建虚拟环境、安装运行依赖并创建本机数据库。也可以手动执行：
+
+```bash
 
 # 创建虚拟环境
 python -m venv venv
@@ -139,7 +162,7 @@ python -m venv venv
 # 激活虚拟环境
 # Windows
 venv\Scripts\activate
-# Linux/Mac
+# Linux/macOS
 source venv/bin/activate
 
 # 安装运行依赖
@@ -197,12 +220,14 @@ Codex 提供的真实 Flow 白名单矩阵：
 
 ### 视频能力（公开目录）
 
-`GET /v1/models`、`GET /api/test/models` 与内置测试页共用同一份服务端目录。视频按“生成方式”拆成 12 个明确 capability；横竖画幅仍作为参数，不另复制一套客户端模型表。Omni 文生支持 8/10 秒，Omni References 只开放 8 秒；Veo 3.1 本轮公开能力均为 8 秒。
+`GET /v1/models`、`GET /api/test/models` 与内置测试页共用同一份服务端目录。视频按“生成方式”拆成 14 个明确 capability；横竖画幅仍作为参数，不另复制一套客户端模型表。Omni 文生支持 8/10 秒，Omni References 只开放 8 秒；Veo 3.1 本轮公开能力均为 8 秒。
 
 | Capability ID | 生成方式 | 图片要求 | 时长 | 16:9 内部映射 | 9:16 内部映射 |
 |---|---|---:|---|---|---|
 | `omni-flash` | 文生视频 | 0 张 | 8/10 秒 | `omni` / `omni_10s` | `omni_portrait` / `omni_portrait_10s` |
 | `omni-flash-references` | 参考图生视频 | 1–3 张 | 8 秒 | `omni` | `omni_portrait` |
+| `omni-1.1-flash` | 文生视频 | 0 张 | 8/10 秒 | `omni_1_1` / `omni_1_1_10s` | `omni_1_1_portrait` / `omni_1_1_portrait_10s` |
+| `omni-1.1-flash-references` | 参考图生视频 | 1–3 张 | 8 秒 | `omni_1_1` | `omni_1_1_portrait` |
 | `veo-3.1-lite` | 文生视频 | 0 张 | 8 秒 | `veo_3_1_t2v_lite_landscape_8s` | `veo_3_1_t2v_lite_portrait_8s` |
 | `veo-3.1-lite-first-frame` | 首帧生视频 | 恰好 1 张 | 8 秒 | `veo_3_1_i2v_lite_landscape_8s` | `veo_3_1_i2v_lite_portrait_8s` |
 | `veo-3.1-lite-first-last` | 首尾帧生视频 | 恰好 2 张 | 8 秒 | `veo_3_1_interpolation_lite_landscape_8s` | `veo_3_1_interpolation_lite_portrait_8s` |
@@ -215,6 +240,8 @@ Codex 提供的真实 Flow 白名单矩阵：
 | `veo-3.1-quality-first-last` | 首尾帧生视频 | 恰好 2 张 | 8 秒 | `veo_3_1_i2v_s_landscape_8s` | `veo_3_1_i2v_s_portrait_8s` |
 
 本轮没有增加新的底层模型表；以上公开 capability 全部映射到现有 `MODEL_CONFIG` 可调用 ID。Omni 10 秒 References **不开放**，Veo 3.1 Quality 的 Ingredients/References **不开放**；调用方不能靠图片张数让普通文生 capability 自动猜成另一种生成方式。Extend 仍是成功视频后的动作，不是普通可选 capability。
+
+Google 官方能力表已列出 Gemini Omni Flash 1.1；本增强版按“不改变旧 Omni 行为、只增加新入口”的原则新增上述两个 capability。官方还列出 4/6 秒、10 秒 References、Frames 和 Video-to-Video 等能力，但本项目按既定菜单偏好和真实验证边界暂不暴露，避免把官方网页可选项误当成当前兼容 API 已验收能力。官方参考：[Google Flow models & supported features](https://support.google.com/flow/answer/16352836)。
 
 影策/巨天的视频清晰度选择 `720P` 时，兼容层将其解释为**上游原生输出**，不会触发放大；空值、`native`、`720p`/`720P` 等价。`1080P`、`4K`、`2160P`、`480P` 未在本轮完成该兼容链真实验证，因此 `/v1/videos` 明确返回 `unsupported_video_parameters`，不会静默降档，也不会改选某个 upsample 模型。
 

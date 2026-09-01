@@ -571,6 +571,17 @@ def set_dependencies(tm: TokenManager, pm: ProxyManager, database: Database, cm:
     configure_extension_pairing_storage(database)
 
 
+async def _validate_flow_access_token(access_token: str) -> Dict[str, Any]:
+    """Require Flow itself to accept a newly exchanged access token."""
+    try:
+        credits = await token_manager.flow_client.get_credits(access_token)
+    except Exception:
+        raise ValueError("flow_authorization_invalid") from None
+    if not isinstance(credits, dict):
+        raise ValueError("flow_authorization_invalid")
+    return credits
+
+
 async def _persist_native_onboarding_result(
     result: Dict[str, Any],
     *,
@@ -591,6 +602,7 @@ async def _persist_native_onboarding_result(
     email = str(user.get("email") or "").strip()
     if not access_token or not email:
         raise ValueError("incomplete onboarding identity")
+    await _validate_flow_access_token(access_token)
 
     at_expires = None
     expires = converted.get("expires")
@@ -664,6 +676,19 @@ async def _persist_native_reauth_result(
             interactive=True,
         )
         raise ValueError("identity_mismatch")
+
+    try:
+        await _validate_flow_access_token(access_token)
+    except ValueError:
+        clear_validation_cache = getattr(token_manager, "_clear_at_validation_cache", None)
+        if callable(clear_validation_cache):
+            clear_validation_cache(token_id)
+        await token_manager._mark_auth_failure(
+            token_id,
+            "oauth_callback_missing",
+            interactive=False,
+        )
+        raise
 
     at_expires = None
     expires = converted.get("expires")

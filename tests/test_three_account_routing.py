@@ -233,6 +233,22 @@ class ThreeAccountRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, self.flow.submit_snapshots[1][self.second.id])
         await self._assert_all_released()
 
+    async def test_automatic_request_marks_runtime_auth_failure_and_fails_over(self):
+        self.flow.failures_by_token[self.first.id] = _FlowBoundaryError(
+            status_code=401,
+            error_code="UNAUTHENTICATED",
+        )
+
+        chunks = await _collect(self.handler)
+
+        self.assertEqual([self.first.id, self.second.id], self.flow.submit_token_ids)
+        self.assertTrue(chunks)
+        first_after = await self.db.get_token(self.first.id)
+        self.assertTrue(first_after.is_active)
+        self.assertEqual("backoff", first_after.auth_state)
+        self.assertEqual("oauth_callback_missing", first_after.last_auth_error_class)
+        await self._assert_all_released()
+
     async def test_idempotent_diagnostic_request_stays_pinned_to_requested_active_account(self):
         await _collect(
             self.handler,
@@ -243,6 +259,21 @@ class ThreeAccountRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(self.first.id, self.flow.submit_token_ids)
         self.assertNotIn(self.inactive.id, self.flow.submit_token_ids)
         self.assertEqual(1, self.flow.submit_snapshots[0][self.second.id])
+        await self._assert_all_released()
+
+    async def test_diagnostic_authentication_failure_stays_pinned_but_updates_auth_state(self):
+        self.flow.failures_by_token[self.second.id] = _FlowBoundaryError(
+            status_code=401,
+            error_code="UNAUTHENTICATED",
+        )
+
+        await _collect(self.handler, diagnostic_token_id=self.second.id)
+
+        self.assertEqual([self.second.id], self.flow.submit_token_ids)
+        second_after = await self.db.get_token(self.second.id)
+        self.assertTrue(second_after.is_active)
+        self.assertEqual("backoff", second_after.auth_state)
+        self.assertEqual("oauth_callback_missing", second_after.last_auth_error_class)
         await self._assert_all_released()
 
 

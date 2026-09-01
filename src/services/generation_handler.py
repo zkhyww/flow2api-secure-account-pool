@@ -721,6 +721,54 @@ MODEL_CONFIG = {
         "use_v2_model_config": True,
         "allow_tier_upgrade": False,
     },
+    # Flow 将同一组已验证的 abra 提交键服务端升级为 Omni 1.1 Flash。
+    # 独立别名只增加新模型入口；旧 Omni ID 和行为保持不变。
+    "omni_1_1": {
+        "type": "video",
+        "video_type": "omni",
+        "model_key": "abra_t2v_8s",
+        "aspect_ratio": "VIDEO_ASPECT_RATIO_LANDSCAPE",
+        "supports_images": True,
+        "min_images": 0,
+        "max_images": 3,
+        "use_v2_model_config": True,
+        "allow_tier_upgrade": False,
+        "reference_model_key": "abra_r2v_8s",
+        "reference_duration": 8,
+        "reference_model_display_name": "Omni 1.1 Flash",
+    },
+    "omni_1_1_portrait": {
+        "type": "video",
+        "video_type": "omni",
+        "model_key": "abra_t2v_8s",
+        "aspect_ratio": "VIDEO_ASPECT_RATIO_PORTRAIT",
+        "supports_images": True,
+        "min_images": 0,
+        "max_images": 3,
+        "use_v2_model_config": True,
+        "allow_tier_upgrade": False,
+        "reference_model_key": "abra_r2v_8s",
+        "reference_duration": 8,
+        "reference_model_display_name": "Omni 1.1 Flash",
+    },
+    "omni_1_1_10s": {
+        "type": "video",
+        "video_type": "t2v",
+        "model_key": "abra_t2v_10s",
+        "aspect_ratio": "VIDEO_ASPECT_RATIO_LANDSCAPE",
+        "supports_images": False,
+        "use_v2_model_config": True,
+        "allow_tier_upgrade": False,
+    },
+    "omni_1_1_portrait_10s": {
+        "type": "video",
+        "video_type": "t2v",
+        "model_key": "abra_t2v_10s",
+        "aspect_ratio": "VIDEO_ASPECT_RATIO_PORTRAIT",
+        "supports_images": False,
+        "use_v2_model_config": True,
+        "allow_tier_upgrade": False,
+    },
 }
 
 
@@ -1760,12 +1808,7 @@ class GenerationHandler:
                     continue
 
                 if error_class == "authentication":
-                    await self.db.update_token(
-                        token_id,
-                        is_active=False,
-                        ban_reason="authentication",
-                        banned_at=datetime.now(timezone.utc),
-                    )
+                    await self.token_manager.record_runtime_authentication_failure(token_id)
                     continue
 
                 if error_class == "membership_tier":
@@ -2087,12 +2130,7 @@ class GenerationHandler:
                     continue
 
                 if error_class == "authentication":
-                    await self.db.update_token(
-                        token_id,
-                        is_active=False,
-                        ban_reason="authentication",
-                        banned_at=datetime.now(timezone.utc),
-                    )
+                    await self.token_manager.record_runtime_authentication_failure(token_id)
                     continue
 
                 if error_class == "membership_tier":
@@ -2229,8 +2267,16 @@ class GenerationHandler:
                 progress=0,
             )
 
+        effective_idempotency_key = idempotency_key
+        if (
+            effective_idempotency_key is None
+            and diagnostic_token_id is None
+            and generation_type in {"image", "video"}
+        ):
+            effective_idempotency_key = f"internal:{request_id}"
+
         quota_path_enabled = bool(
-            idempotency_key
+            effective_idempotency_key
             and generation_type in {"image", "video"}
             and getattr(self.token_manager, "db", None) is self.db
             and callable(getattr(self.db, "reserve_task_quota", None))
@@ -2243,7 +2289,7 @@ class GenerationHandler:
                     images=images,
                     stream=stream,
                     base_url_override=base_url_override,
-                    idempotency_key=idempotency_key,
+                    idempotency_key=effective_idempotency_key,
                     request_log_state=request_log_state,
                     diagnostic_token_id=diagnostic_token_id,
                 )
@@ -2255,7 +2301,7 @@ class GenerationHandler:
                     stream=stream,
                     base_url_override=base_url_override,
                     video_media_id=video_media_id,
-                    idempotency_key=idempotency_key,
+                    idempotency_key=effective_idempotency_key,
                     request_log_state=request_log_state,
                     diagnostic_token_id=diagnostic_token_id,
                 )
@@ -2639,7 +2685,9 @@ class GenerationHandler:
                     )
             debug_logger.log_error(f"[GENERATION] 生成失败: {type(e).__name__}")
             if token:
-                if self._should_count_token_error(e):
+                if public_error_class == "authentication":
+                    await self.token_manager.record_runtime_authentication_failure(token.id)
+                elif self._should_count_token_error(e):
                     await self.token_manager.record_error(token.id)
                 else:
                     debug_logger.log_info(

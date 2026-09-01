@@ -513,6 +513,57 @@ def build_public_model_catalog(
             ],
             catalog_order=13,
         ),
+        _video_capability(
+            model_config,
+            capability_id="omni-1.1-flash",
+            primary_model_id="omni_1_1",
+            display_name="Omni 1.1 Flash · 文生视频",
+            description="Omni 1.1 Flash 的 8 秒或 10 秒纯文本视频入口。",
+            generation_mode="text_to_video",
+            generation_mode_label="文生视频",
+            image_semantics="不使用图片",
+            min_images=0,
+            max_images=0,
+            model_map={
+                "8": {
+                    "16:9": "omni_1_1",
+                    "9:16": "omni_1_1_portrait",
+                },
+                "10": {
+                    "16:9": "omni_1_1_10s",
+                    "9:16": "omni_1_1_portrait_10s",
+                },
+            },
+            usage_guide="只输入文字；8/10 秒均可，影策/巨天清晰度请选择 720P（按上游原生输出处理）。",
+            unsupported_notes=[
+                "只开放已验证的 8/10 秒原生提交链；4/6 秒、360P、1080P/4K 和编辑/延长尚未验证，不在此入口暴露。"
+            ],
+            catalog_order=14,
+            default_duration="10",
+        ),
+        _video_capability(
+            model_config,
+            capability_id="omni-1.1-flash-references",
+            primary_model_id="omni_1_1",
+            display_name="Omni 1.1 Flash · 参考图生视频",
+            description="Omni 1.1 Flash 的 8 秒 Reference Images 入口。",
+            generation_mode="references_to_video",
+            generation_mode_label="参考图生视频",
+            image_semantics="1–3 张人物或素材参考图",
+            min_images=1,
+            max_images=3,
+            model_map={
+                "8": {
+                    "16:9": "omni_1_1",
+                    "9:16": "omni_1_1_portrait",
+                },
+            },
+            usage_guide="上传 1–3 张参考图并选择 8 秒；影策/巨天清晰度请选择 720P（按上游原生输出处理）。",
+            unsupported_notes=[
+                "10 秒参考图、首尾帧、视频参考及放大尚未完成真实验证，因此暂不开放。"
+            ],
+            catalog_order=15,
+        ),
     ]
     for entry in catalog:
         if entry["validation_status"] not in _SELECTABLE_STATES:

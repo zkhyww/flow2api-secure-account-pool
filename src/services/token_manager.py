@@ -150,6 +150,15 @@ class TokenManager:
             error_class=error_class,
         )
 
+    async def record_runtime_authentication_failure(self, token_id: int) -> None:
+        """Persist a runtime 401 without changing the user's enable intent."""
+        self._clear_at_validation_cache(token_id)
+        await self._mark_auth_failure(
+            token_id,
+            "oauth_callback_missing",
+            interactive=False,
+        )
+
     def _get_account_profile_store(self):
         if self._account_profile_store is None:
             from .account_profile_store import AccountProfileStore
@@ -457,11 +466,12 @@ class TokenManager:
 
         try:
             credits_result = await self.flow_client.get_credits(at)
-            credits = credits_result.get("credits", 0)
-            user_paygate_tier = credits_result.get("userPaygateTier")
         except Exception:
-            credits = 0
-            user_paygate_tier = None
+            raise ValueError("flow_authorization_invalid") from None
+        if not isinstance(credits_result, dict):
+            raise ValueError("flow_authorization_invalid")
+        credits = credits_result.get("credits", 0)
+        user_paygate_tier = credits_result.get("userPaygateTier")
 
         base_project_name = self._normalize_project_name_base(project_name)
         project_pool_size = self._get_project_pool_size()

@@ -16,6 +16,8 @@ EXPECTED_CAPABILITY_IDS = {
     "nano-banana-pro",
     "omni-flash",
     "omni-flash-references",
+    "omni-1.1-flash",
+    "omni-1.1-flash-references",
     "veo-3.1-lite",
     "veo-3.1-lite-first-frame",
     "veo-3.1-lite-first-last",
@@ -52,6 +54,26 @@ EXPECTED_VIDEO_SELECTIONS = {
         "mappings": {
             ("16:9", "8"): "omni",
             ("9:16", "8"): "omni_portrait",
+        },
+    },
+    "omni-1.1-flash": {
+        "mode": "text_to_video",
+        "label": "文生视频",
+        "images": (0, 0),
+        "mappings": {
+            ("16:9", "8"): "omni_1_1",
+            ("9:16", "8"): "omni_1_1_portrait",
+            ("16:9", "10"): "omni_1_1_10s",
+            ("9:16", "10"): "omni_1_1_portrait_10s",
+        },
+    },
+    "omni-1.1-flash-references": {
+        "mode": "references_to_video",
+        "label": "参考图生视频",
+        "images": (1, 3),
+        "mappings": {
+            ("16:9", "8"): "omni_1_1",
+            ("9:16", "8"): "omni_1_1_portrait",
         },
     },
     "veo-3.1-lite": {
@@ -309,7 +331,10 @@ class CanonicalModelCatalogUnitTests(unittest.TestCase):
             {"8", "10"},
             _option_values(self.catalog["omni-flash"], "duration_seconds"),
         )
-        for capability_id in EXPECTED_VIDEO_CAPABILITIES - {"omni-flash"}:
+        for capability_id in EXPECTED_VIDEO_CAPABILITIES - {
+            "omni-flash",
+            "omni-1.1-flash",
+        }:
             self.assertEqual(
                 {"8"},
                 _option_values(self.catalog[capability_id], "duration_seconds"),
@@ -434,8 +459,8 @@ class CanonicalModelCatalogApiTests(unittest.IsolatedAsyncioTestCase):
         test_models = await self._get_test_models()
         self.assertEqual(EXPECTED_CAPABILITY_IDS, set(_by_capability(public_models)))
         self.assertEqual(EXPECTED_CAPABILITY_IDS, set(_by_capability(test_models)))
-        self.assertEqual(14, len(public_models))
-        self.assertEqual(14, len(test_models))
+        self.assertEqual(16, len(public_models))
+        self.assertEqual(16, len(test_models))
 
         def visible_mapping_contract(entries):
             return {

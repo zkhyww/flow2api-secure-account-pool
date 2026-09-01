@@ -4,6 +4,7 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -325,6 +326,7 @@ class WindowsAutostartStaticContractTests(unittest.TestCase):
 
             with patch.object(launcher, "REPO_ROOT", repo):
                 result = launcher.run_launcher(
+                    ensure_runtime=lambda _repo: python_exe,
                     health_probe=lambda url: next(probe_results),
                     popen=fake_popen,
                     sleep=lambda seconds: sleeps.append(seconds),
@@ -343,6 +345,80 @@ class WindowsAutostartStaticContractTests(unittest.TestCase):
         self.assertEqual([1.0], sleeps)
         self.assertEqual([launcher.MANAGE_URL], opened)
         self.assertEqual([], errors)
+
+    def test_fresh_checkout_bootstraps_runtime_then_starts_service(self):
+        launcher = self._load_launcher()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "main.py").write_text("", encoding="utf-8")
+            (repo / "requirements.txt").write_text("fastapi==0.119.0\n", encoding="utf-8")
+            python_exe = repo / "venv" / "Scripts" / "python.exe"
+            ensure_calls = []
+            popen_calls = []
+            probe_results = iter((False, True))
+
+            def fake_ensure_runtime(candidate_repo):
+                ensure_calls.append(Path(candidate_repo))
+                python_exe.parent.mkdir(parents=True)
+                python_exe.write_bytes(b"")
+                return python_exe
+
+            result = launcher.run_launcher(
+                repo_root=repo,
+                ensure_runtime=fake_ensure_runtime,
+                health_probe=lambda _url: next(probe_results),
+                popen=lambda argv, **kwargs: popen_calls.append((list(argv), dict(kwargs))),
+                sleep=lambda _seconds: None,
+                monotonic=iter((0.0, 0.0, 1.0)).__next__,
+                open_browser=lambda _url: None,
+                show_error=lambda message: self.fail(message),
+                startup_timeout_seconds=10.0,
+            )
+
+        self.assertEqual(0, result)
+        self.assertEqual([repo], ensure_calls)
+        self.assertEqual([str(python_exe), str(repo / "main.py")], popen_calls[0][0])
+
+    def test_runtime_bootstrap_creates_venv_and_installs_changed_requirements_once(self):
+        launcher = self._load_launcher()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            requirements = repo / "requirements.txt"
+            requirements.write_text("fastapi==0.119.0\n", encoding="utf-8")
+            calls = []
+
+            def fake_run(argv, **kwargs):
+                calls.append((list(argv), dict(kwargs)))
+                if argv[1:3] == ["-m", "venv"]:
+                    python_exe = repo / "venv" / "Scripts" / "python.exe"
+                    python_exe.parent.mkdir(parents=True)
+                    python_exe.write_bytes(b"")
+                return SimpleNamespace(returncode=0)
+
+            first = launcher.ensure_local_runtime(
+                repo,
+                base_python=Path("C:/Python311/python.exe"),
+                run=fake_run,
+            )
+            second = launcher.ensure_local_runtime(
+                repo,
+                base_python=Path("C:/Python311/python.exe"),
+                run=fake_run,
+            )
+
+        self.assertEqual(repo / "venv" / "Scripts" / "python.exe", first)
+        self.assertEqual(first, second)
+        self.assertEqual(2, len(calls))
+        self.assertEqual(["-m", "venv"], calls[0][0][1:3])
+        self.assertEqual(["-m", "pip", "install", "-r"], calls[1][0][1:5])
+
+    def test_fresh_install_defaults_to_pluginless_personal_captcha(self):
+        import tomli
+
+        with (REPO_ROOT / "config" / "setting_example.toml").open("rb") as handle:
+            defaults = tomli.load(handle)
+
+        self.assertEqual("personal", defaults["captcha"]["captcha_method"])
 
     def test_one_click_launcher_reports_missing_runtime_and_timeout_without_opening_browser(self):
         launcher = self._load_launcher()
@@ -372,6 +448,7 @@ class WindowsAutostartStaticContractTests(unittest.TestCase):
             launches = []
             with patch.object(launcher, "REPO_ROOT", repo):
                 result = launcher.run_launcher(
+                    ensure_runtime=lambda _repo: python_exe,
                     health_probe=lambda _url: False,
                     popen=lambda argv, **kwargs: launches.append((list(argv), dict(kwargs))),
                     sleep=lambda _: None,

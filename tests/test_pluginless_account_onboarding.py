@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from src.api import admin
 from src.services.browser_captcha_personal import BrowserCaptchaService
+from src.services.token_manager import TokenManager
 
 
 class PluginlessBrowserCaptureTests(unittest.IsolatedAsyncioTestCase):
@@ -166,7 +167,8 @@ class PluginlessAccountPersistenceTests(unittest.IsolatedAsyncioTestCase):
                     "expires": "2030-01-01T00:00:00Z",
                     "user": {"email": "fixture-new@example.invalid"},
                 }
-            )
+            ),
+            get_credits=AsyncMock(return_value={"credits": 100}),
         )
         manager = SimpleNamespace(
             flow_client=flow_client,
@@ -216,7 +218,8 @@ class PluginlessAccountPersistenceTests(unittest.IsolatedAsyncioTestCase):
                     "expires": "2030-01-01T00:00:00Z",
                     "user": {"email": "fixture-existing@example.invalid"},
                 }
-            )
+            ),
+            get_credits=AsyncMock(return_value={"credits": 100}),
         )
         manager = SimpleNamespace(
             flow_client=flow_client,
@@ -283,6 +286,64 @@ class PluginlessAccountPersistenceTests(unittest.IsolatedAsyncioTestCase):
         admin.token_manager.add_token.assert_not_awaited()
         admin.token_manager.update_token.assert_not_awaited()
 
+    async def test_native_capture_rejects_access_token_that_flow_does_not_accept(self):
+        flow_client = SimpleNamespace(
+            st_to_at=AsyncMock(
+                return_value={
+                    "access_token": "opaque-access-rejected",
+                    "expires": "2030-01-01T00:00:00Z",
+                    "user": {"email": "fixture-rejected@example.invalid"},
+                }
+            ),
+            get_credits=AsyncMock(side_effect=RuntimeError("private upstream fixture")),
+        )
+        manager = SimpleNamespace(
+            flow_client=flow_client,
+            add_token=AsyncMock(),
+        )
+        database = SimpleNamespace(
+            get_token_by_email=AsyncMock(),
+            update_token=AsyncMock(),
+        )
+        admin.token_manager = manager
+        admin.db = database
+
+        with self.assertRaisesRegex(ValueError, "flow_authorization_invalid"):
+            await admin._persist_native_onboarding_result(
+                {
+                    "st": "opaque-session-rejected",
+                    "google_cookies": "opaque-cookie-rejected",
+                },
+                account_profile_key="a" * 32,
+            )
+
+        flow_client.get_credits.assert_awaited_once_with("opaque-access-rejected")
+        database.get_token_by_email.assert_not_awaited()
+        manager.add_token.assert_not_awaited()
+
+    async def test_manual_add_rejects_access_token_that_flow_does_not_accept(self):
+        database = SimpleNamespace(
+            get_token_by_st=AsyncMock(return_value=None),
+            add_token=AsyncMock(),
+        )
+        flow_client = SimpleNamespace(
+            st_to_at=AsyncMock(
+                return_value={
+                    "access_token": "opaque-access-rejected",
+                    "user": {"email": "fixture-rejected@example.invalid"},
+                }
+            ),
+            get_credits=AsyncMock(side_effect=RuntimeError("private upstream fixture")),
+            create_project=AsyncMock(),
+        )
+        manager = TokenManager(database, flow_client)
+
+        with self.assertRaisesRegex(ValueError, "flow_authorization_invalid"):
+            await manager.add_token(st="opaque-session-rejected")
+
+        database.add_token.assert_not_awaited()
+        flow_client.create_project.assert_not_awaited()
+
     async def test_reauth_identity_mismatch_fails_closed_without_enabling_or_overwrite(self):
         existing = SimpleNamespace(
             id=7,
@@ -326,6 +387,54 @@ class PluginlessAccountPersistenceTests(unittest.IsolatedAsyncioTestCase):
             interactive=True,
         )
 
+    async def test_reauth_rejects_access_token_that_flow_does_not_accept(self):
+        existing = SimpleNamespace(
+            id=7,
+            email="expected@example.invalid",
+            is_active=True,
+            account_profile_key="",
+        )
+        flow_client = SimpleNamespace(
+            st_to_at=AsyncMock(
+                return_value={
+                    "access_token": "opaque-access-rejected",
+                    "expires": "2030-01-01T00:00:00Z",
+                    "user": {"email": "expected@example.invalid"},
+                }
+            ),
+            get_credits=AsyncMock(side_effect=RuntimeError("private upstream fixture")),
+        )
+        manager = SimpleNamespace(
+            flow_client=flow_client,
+            _mark_auth_failure=AsyncMock(),
+            _clear_at_validation_cache=Mock(),
+        )
+        commit_reauth = AsyncMock()
+        admin.token_manager = manager
+        admin.db = SimpleNamespace(
+            get_token=AsyncMock(return_value=existing),
+            commit_account_reauth=commit_reauth,
+        )
+
+        with self.assertRaisesRegex(ValueError, "flow_authorization_invalid"):
+            await admin._persist_native_reauth_result(
+                7,
+                {
+                    "st": "opaque-session-rejected",
+                    "google_cookies": "opaque-cookie-rejected",
+                },
+                account_profile_key="2" * 32,
+            )
+
+        flow_client.get_credits.assert_awaited_once_with("opaque-access-rejected")
+        manager._mark_auth_failure.assert_awaited_once_with(
+            7,
+            "oauth_callback_missing",
+            interactive=False,
+        )
+        manager._clear_at_validation_cache.assert_called_once_with(7)
+        commit_reauth.assert_not_awaited()
+
     async def test_reauth_matching_identity_persists_profile_then_explicitly_enables(self):
         existing = SimpleNamespace(
             id=7,
@@ -341,7 +450,8 @@ class PluginlessAccountPersistenceTests(unittest.IsolatedAsyncioTestCase):
                         "expires": "2030-01-01T00:00:00Z",
                         "user": {"email": "expected@example.invalid"},
                     }
-                )
+                ),
+                get_credits=AsyncMock(return_value={"credits": 100}),
             ),
             update_token=AsyncMock(),
             enable_token=AsyncMock(),

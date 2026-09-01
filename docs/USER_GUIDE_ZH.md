@@ -4,7 +4,19 @@
 
 ## 1. Windows 首次安装
 
-建议使用 Python 3.11；上游 README 标注 Python 3.8+。在项目目录执行：
+准备项：
+
+- 安装 Python 3.11 或更高版本（64 位），安装时勾选 `Add Python to PATH`。
+- 安装最新版 Google Chrome，供本机账号登录和认证恢复使用。
+- 从 `https://github.com/zkhyww/flow2api-secure-account-pool` 下载 ZIP 后完整解压，或使用 Git clone。不要只复制几个脚本。
+
+最简单的启动方式是双击根目录的 `start-flow2api.cmd`。第一次运行会自动：
+
+1. 创建项目自己的 `venv`。
+2. 安装 `requirements.txt` 中的运行依赖；依赖未变化时以后不会重复安装。
+3. 启动服务。首次启动时程序会自动创建 `data/flow.db` 和所需表结构，不需要单独安装数据库。
+
+如果一键初始化失败，先确认 Python 3.11 或更高版本可在命令行运行、网络能访问 Python 包源，再重新双击。需要手工安装时才执行：
 
 ```powershell
 python -m venv venv
@@ -19,9 +31,11 @@ venv\Scripts\python.exe -m pip install -r requirements-test.txt
 
 `requirements-test.txt` 不属于生产运行依赖；只运行服务时无需安装它。不要把 API Key、Google Cookie 或其他凭据写进启动命令。
 
+仓库中没有、也不应该有另一台电脑的数据库或登录数据。`data/`、`config/setting.toml`、Google Cookie、账号 Profile 和 API Key 均被 Git 排除：下载代码后页面里没有原机器的账号是正常且必要的安全设计。每台电脑首次使用时都要在本机逐个添加账号。
+
 ## 2. 一键启动与开机自启
 
-双击项目根目录的 `start-flow2api.pyw` 即可本地启动。服务已经健康运行时，它不会重复拉第二份服务，只会打开管理页；服务未运行时，它会使用当前项目自己的 venv 启动并等待健康检查。
+优先双击项目根目录的 `start-flow2api.cmd`。它会选择已有 venv；新下载的目录没有 venv 时，会调用本机默认的 Python 3.11 或更高版本执行 `start-flow2api.pyw` 并自动补齐环境。服务已经健康运行时，它不会重复拉第二份服务，只会打开管理页；服务未运行时，它会启动并等待健康检查。
 
 管理页提供“Windows 登录后自动启动 Flow2API”开关。它读取 Windows Task Scheduler 的真实状态，不在数据库里另存一个假开关。修改后建议刷新页面确认状态。
 
@@ -50,7 +64,7 @@ venv\Scripts\python.exe -m pip install -r requirements-test.txt
 
 图片页可选公开模型、比例和 1K/2K/4K。1K/2K 是当前常用档；4K 可能需要更高会员权限，不满足时会返回类似 `membership_required` 的公开错误，不会偷偷降级。
 
-视频页中，Omni Flash 公开 8 秒和 10 秒并默认 10 秒；Veo 3.1 Lite/Fast/Quality 的公开能力仍以 8 秒为主。只有模型明确支持参考图时才应上传参考图，不支持时会 fail-closed。
+视频页中，旧 Omni Flash 与新增 Omni 1.1 Flash 都提供独立入口：文生公开 8 秒和 10 秒并默认 10 秒，参考图入口当前只公开已验证的 8 秒；旧 Omni 的 ID 和行为没有被替换。Veo 3.1 Lite/Fast/Quality 的公开能力仍以 8 秒为主。只有模型明确支持参考图时才应上传参考图，不支持时会 fail-closed。Google 官方完整能力表可查看：`https://support.google.com/flow/answer/16352836`；官方网页存在但本兼容 API 尚未真实验收的组合不会提前出现在菜单里。
 
 ## 6. 查看和更换 API Key
 
@@ -131,6 +145,9 @@ venv\Scripts\python.exe scripts\real_unattended_soak.py --kind video
 ## 11. 常见故障
 
 - **服务红灯/页面打不开**：先看一键启动是否报告失败，再检查本地 `/health`，不要重复启动很多实例。
+- **新电脑双击后没有服务**：确认已安装 Python 3.11 或更高版本（并加入 PATH）、Google Chrome，且网络可安装 `requirements.txt`；完整解压仓库后再运行，不要从压缩包预览窗口直接启动。
+- **新电脑登录页能开但没有旧账号**：这是正常现象。Git 不同步数据库、Cookie 或 Profile；请在新电脑逐个添加账号，不能靠复制另一台机器的 `data/` 绕过登录。
+- **账号显示正常但生成时 401**：新版本会把账号转为“稍后重试/需要重新登录”并在自动调度时切换下一个可用账号；明确指定账号的诊断请求不会偷偷换号。
 - **等待自动恢复 / 稍后重试**：先让后台恢复按退避继续，不要手工高频刷新，也不会因此永久停用账号。
 - **需要重新登录**：回管理页使用“重新登录并启用”，在打开的浏览器中完成正常 Google 登录或验证。
 - **captcha**：按页面要求人工完成验证码，不绕过风控。

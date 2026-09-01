@@ -144,11 +144,9 @@ class Batch3FailureRoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def _assert_authentication_account_is_persistently_excluded(self, token_id):
         token = await self.db.get_token(token_id)
-        auth_state = str(token.ban_reason or "").strip().lower()
-        self.assertTrue(
-            (not token.is_active) or ("auth" in auth_state),
-            "401 must persistently exclude the failed account until refresh/re-login, not only increment a generic error counter",
-        )
+        self.assertTrue(token.is_active)
+        self.assertEqual("backoff", token.auth_state)
+        self.assertEqual("oauth_callback_missing", token.last_auth_error_class)
 
     async def _assert_account_is_healthy(self, token_id):
         token = await self.db.get_token(token_id)

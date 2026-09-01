@@ -206,11 +206,9 @@ class Batch3VideoQuotaRoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def _assert_authentication_account_is_persistently_excluded(self, token_id):
         token = await self.db.get_token(token_id)
-        auth_state = str(token.ban_reason or "").strip().lower()
-        self.assertTrue(
-            (not token.is_active) or ("auth" in auth_state),
-            "authentication failure must exclude the account until refresh or re-login",
-        )
+        self.assertTrue(token.is_active)
+        self.assertEqual("backoff", token.auth_state)
+        self.assertEqual("oauth_callback_missing", token.last_auth_error_class)
 
     async def test_zero_credit_first_account_is_skipped_before_video_submit(self):
         empty = await self._add_token(credits=0, ordinal=1)
